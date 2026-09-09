@@ -275,6 +275,36 @@ install_ui() {
   return 0
 }
 
+# Screenshots depend on ffmpeg actually running, not just being present -- a
+# known dArkOS build gap on rk3326 leaves ffmpeg installed but unable to load
+# libvulkan.so.1 (see gs-doctor.sh).  Surface that now rather than waiting for
+# a failed thumbnail and a debug-log round trip.
+check_ffmpeg() {
+  local ffbin ff_out
+  if [ -x /usr/bin/ffmpeg ]; then
+    ffbin=/usr/bin/ffmpeg
+  else
+    ffbin="$(command -v ffmpeg 2>/dev/null)"
+  fi
+  if [ -z "${ffbin}" ]; then
+    say "Warning: ffmpeg not found -- screenshots in the switcher will not work."
+    return 0
+  fi
+  ff_out="$("${ffbin}" -version 2>&1)"
+  if [ $? -eq 0 ]; then
+    return 0
+  fi
+  say ""
+  say "Warning: ffmpeg is installed but failed to run -- screenshots in the"
+  say "switcher will not work until this is fixed:"
+  say "${ff_out}"
+  case "${ff_out}" in
+    *"error while loading shared libraries: libvulkan.so"*)
+      say "Fix: sudo apt-get install -y libvulkan1"
+      ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 
 preflight
@@ -293,6 +323,7 @@ if [ -z "${ROOT}" ]; then
   # shellcheck disable=SC1091
   . "${BIN}/gs-common.sh"
   gs_recents_seed
+  check_ffmpeg
 fi
 
 say ""

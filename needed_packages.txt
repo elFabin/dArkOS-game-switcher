@@ -59,6 +59,7 @@ libtool-bin
 libudev1
 libvorbisidec1
 libvpx9
+libvulkan1
 libxkbcommon0
 libzip5
 mbrola

@@ -64,10 +64,26 @@ else
 fi
 if [ -z "${ffbin}" ]; then
   echo "ffmpeg:   MISSING"
-elif "${ffbin}" -version >/dev/null 2>&1; then
-  echo "ffmpeg:   present at ${ffbin}, runs OK"
 else
-  echo "ffmpeg:   present at ${ffbin}, but running it failed"
+  ff_out="$("${ffbin}" -version 2>&1)"
+  if [ $? -eq 0 ]; then
+    echo "ffmpeg:   present at ${ffbin}, runs OK"
+  else
+    echo "ffmpeg:   present at ${ffbin}, but running it failed:"
+    echo "${ff_out}" | sed 's/^/          /'
+    case "${ff_out}" in
+      *"error while loading shared libraries: libvulkan.so"*)
+        echo "          fix: sudo apt-get install -y libvulkan1"
+        echo "          (a known dArkOS build gap on rk3326 -- cleanup_filesystem.sh's"
+        echo "          apt autoremove reaps libvulkan1 after removing the libvulkan-dev"
+        echo "          build dependency; rk3566 has its own repair step, rk3326 doesn't)"
+        ;;
+      *"error while loading shared libraries:"*)
+        missing_lib="$(printf '%s\n' "${ff_out}" | sed -n 's/.*error while loading shared libraries: \([^:]*\):.*/\1/p' | head -1)"
+        echo "          fix: find and install the package that provides ${missing_lib:-the missing library}"
+        ;;
+    esac
+  fi
 fi
 command -v nc       >/dev/null 2>&1 && echo "nc:       present" || echo "nc:       MISSING"
 command -v python3  >/dev/null 2>&1 && echo "python3:  present" || echo "python3:  MISSING"

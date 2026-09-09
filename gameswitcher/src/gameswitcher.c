@@ -594,6 +594,17 @@ int main(int argc, char **argv)
         return EXIT_UI_FAILED;
     }
 
+    /* Push a black frame before doing anything else. Whatever last held the
+     * display (RetroArch, or EmulationStation before it) keeps its last
+     * flipped frame on screen until something presents a new one -- normal
+     * DRM/KMS behavior, the same class of handover gap amiberry.sh works
+     * around for its own launch. Cutting to black here, before the font
+     * atlas build or the event loop, is the earliest point we can shrink
+     * that gap to. */
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    SDL_RenderPresent(ren);
+
     SDL_ShowCursor(SDL_DISABLE);
     if (!forced_w)
         SDL_GetRendererOutputSize(ren, &W, &H);

@@ -54,11 +54,18 @@ GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
 # install time included "power" -- flip it on by re-running install.sh.
 
 # Freeze EmulationStation (SIGSTOP) for the life of the switch loop and
-# SIGCONT it on every exit path.  Off by default: the diagnosed cause of ES
-# appearing to "take over" is a lost DRM-master race between the switcher and
-# the next game (see gameswitcher.c's init retry), not ES itself running, and
-# a frozen ES looks exactly like a dead device if this ever fails to resume.
-# Try 1 only if GS_SHOW_SPLASH=0 plus the retry logic don't fix it.
+# SIGCONT it on every exit path.  Off by default, and this will NOT fix ES
+# appearing to "take over": for the whole time a game runs, ES's main process
+# is blocked deep in its own wait-for-child call, so it is not scheduled to
+# draw anything a signal could interrupt.  What's actually visible during the
+# handover gap is almost always a stale DRM/KMS frame -- the last thing
+# flipped to the display persists until something presents a new one -- which
+# is what gameswitcher.c's black-frame-first draw and init retry address
+# instead (see its comments, and amiberry.sh for the same class of bug on
+# this device).  SIGSTOP does still suspend every thread in the ES process
+# though, not just its blocked main one, so this can still be worth enabling
+# if ES has independent background activity you want to pause (its own
+# screensaver timer is the likely candidate) -- just not for this symptom.
 GS_ES_FREEZE="${GS_ES_FREEZE:-0}"
 
 # Log every switch, screenshot attempt and UI start to
