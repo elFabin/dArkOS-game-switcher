@@ -172,19 +172,34 @@ gs_wait_for_teardown() {
 # (GS_ES_FREEZE=1).  Never `systemctl stop` it: emulationstation.service is
 # Type=simple with the default KillMode=control-group, and our own shim is
 # inside that same cgroup, so stopping the service would kill the switcher.
+#
+# Signal it via `systemctl kill --kill-whom=main`, not `pkill -x`: the real
+# binary name is "emulationstation", exactly 16 characters -- one over the
+# kernel's 15-character /proc/PID/comm limit (TASK_COMM_LEN=16 including the
+# NUL) -- so the kernel truncates the running process's comm to
+# "emulationstatio" and an exact-match `pkill -x emulationstation` can never
+# match it (confirmed: it's a silent no-op, not a real freeze).  This is also
+# why every other ES lifecycle touch point in dArkOS uses systemctl rather
+# than a comm-name signal.  `--kill-whom=main` targets exactly the unit's
+# tracked MainPID (the ES binary itself, never our own process tree sharing
+# its cgroup), sidestepping comm-name matching entirely.  `sudo` is required
+# (this is a system-instance unit) and is free here: `ark ALL=NOPASSWD: ALL`
+# per utils.sh's setup_ark_user(), the same rule every other `sudo systemctl
+# suspend` / `sudo perfmax` call in this codebase already relies on.
+#
 # SIGSTOP only pauses scheduling; the process resumes exactly where it left
 # off, and never triggers systemd's Restart=on-failure.
 # ---------------------------------------------------------------------------
 
 gs_es_freeze() {
   [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
-  pkill -STOP -x emulationstation 2>/dev/null
+  sudo systemctl kill --kill-whom=main --signal=STOP emulationstation.service 2>/dev/null
 }
 
 # Unconditional and safe to call even when nothing is frozen: this is the one
 # call that must never be skipped, so it does not gate on GS_ES_FREEZE.
 gs_es_resume() {
-  pkill -CONT -x emulationstation 2>/dev/null
+  sudo systemctl kill --kill-whom=main --signal=CONT emulationstation.service 2>/dev/null
 }
 
 # A background watchdog that resumes ES if this process disappears without
@@ -196,7 +211,7 @@ gs_es_watchdog_start() {
     while kill -0 "${watch_pid}" 2>/dev/null; do
       sleep 2
     done
-    pkill -CONT -x emulationstation 2>/dev/null
+    sudo systemctl kill --kill-whom=main --signal=CONT emulationstation.service 2>/dev/null
   ) &
   disown 2>/dev/null
 }

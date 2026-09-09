@@ -57,7 +57,18 @@ done
 echo
 
 echo "-- Tools --"
-command -v ffmpeg  >/dev/null 2>&1 && echo "ffmpeg:   present" || echo "ffmpeg:   MISSING"
+if [ -x /usr/bin/ffmpeg ]; then
+  ffbin=/usr/bin/ffmpeg
+else
+  ffbin="$(command -v ffmpeg 2>/dev/null)"
+fi
+if [ -z "${ffbin}" ]; then
+  echo "ffmpeg:   MISSING"
+elif "${ffbin}" -version >/dev/null 2>&1; then
+  echo "ffmpeg:   present at ${ffbin}, runs OK"
+else
+  echo "ffmpeg:   present at ${ffbin}, but running it failed"
+fi
 command -v nc       >/dev/null 2>&1 && echo "nc:       present" || echo "nc:       MISSING"
 command -v python3  >/dev/null 2>&1 && echo "python3:  present" || echo "python3:  MISSING"
 if [ -x "${GS_OPT}/gameswitcher" ]; then

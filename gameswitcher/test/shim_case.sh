@@ -228,39 +228,49 @@ check "the text menu served the fallback" \
       "$(cat "${WORK}/ui-source.log" 2>/dev/null)" "menu"
 
 # --- 9. GS_ES_FREEZE=1 stops and resumes EmulationStation ------------------
-PKILLBIN="${WORK}/pkillbin"
-mkdir -p "${PKILLBIN}"
-cat > "${PKILLBIN}/pkill" <<'STUB'
+# gs_es_freeze/resume now go through `sudo systemctl kill --kill-whom=main`
+# (pkill -x can never match "emulationstation" -- it's 16 characters, one
+# over the kernel's 15-character comm limit, so the real process's comm is
+# truncated and an exact-match pkill silently matches nothing).  That means
+# stubbing `systemctl` on PATH is not enough to intercept it: confirmed here
+# that `sudo` resolves the command it runs against its own `secure_path`,
+# not the caller's PATH, so a systemctl stub gets bypassed in favor of the
+# real binary.  `sudo` itself, though, is found via the calling shell's own
+# ordinary PATH lookup (secure_path only governs what *sudo* uses internally
+# to find its target) -- so stub `sudo`, not `systemctl`.
+SUDOBIN="${WORK}/sudobin"
+mkdir -p "${SUDOBIN}"
+cat > "${SUDOBIN}/sudo" <<'STUB'
 #!/bin/bash
-echo "$*" >> "${WORK}/pkill.log"
+echo "$*" >> "${WORK}/sudo.log"
 exit 0
 STUB
-chmod +x "${PKILLBIN}/pkill"
+chmod +x "${SUDOBIN}/sudo"
 
 reset_case
-rm -f "${WORK}/pkill.log"
+rm -f "${WORK}/sudo.log"
 printf 'end\n' > "${WORK}/ra.plan"
 : > "${WORK}/ui.plan"
-GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
 check "freeze stops EmulationStation before the game" \
-      "$(grep -c -- '-STOP -x emulationstation' "${WORK}/pkill.log")" "1"
+      "$(grep -c -- 'systemctl kill --kill-whom=main --signal=STOP emulationstation.service' "${WORK}/sudo.log")" "1"
 check "freeze resumes EmulationStation on a normal exit" \
-      "$(grep -c -- '-CONT -x emulationstation' "${WORK}/pkill.log")" "2"
+      "$(grep -c -- 'systemctl kill --kill-whom=main --signal=CONT emulationstation.service' "${WORK}/sudo.log")" "2"
 
 # A SIGKILLed shim skips its own EXIT trap entirely (SIGKILL can't be
 # caught), so the *next* shim invocation is what has to notice and resume
 # EmulationStation -- the "self-heal first" line at the top of gs-shim.sh.
 reset_case
-rm -f "${WORK}/pkill.log"
+rm -f "${WORK}/sudo.log"
 cat > "${GS_OPT}/orig/retroarch" <<'STUB'
 #!/bin/bash
 echo "$*" >> "${WORK}/launches.log"
 kill -KILL "$PPID"
 STUB
 chmod +x "${GS_OPT}/orig/retroarch"
-GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Killed.sfc >/dev/null 2>&1
+GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Killed.sfc >/dev/null 2>&1
 check "a SIGKILLed shim still froze ES once" \
-      "$(grep -c -- '-STOP -x emulationstation' "${WORK}/pkill.log")" "1"
+      "$(grep -c -- 'systemctl kill --kill-whom=main --signal=STOP emulationstation.service' "${WORK}/sudo.log")" "1"
 
 # Restore the well-behaved stub before the next, ordinary invocation.
 cat > "${GS_OPT}/orig/retroarch" <<'STUB'
@@ -274,9 +284,9 @@ exit 0
 STUB
 chmod +x "${GS_OPT}/orig/retroarch"
 printf 'end\n' > "${WORK}/ra.plan"
-rm -f "${WORK}/pkill.log"
-GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
+rm -f "${WORK}/sudo.log"
+GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
 check "the next shim invocation self-heals the stale freeze before anything else" \
-      "$(head -1 "${WORK}/pkill.log")" "-CONT -x emulationstation"
+      "$(head -1 "${WORK}/sudo.log")" "systemctl kill --kill-whom=main --signal=CONT emulationstation.service"
 
 exit "${FAIL}"

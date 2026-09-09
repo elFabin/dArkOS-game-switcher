@@ -39,15 +39,29 @@ gs_shot_dir() {
 # Grab the frame the player is looking at, before anything quits.
 # ---------------------------------------------------------------------------
 gs_capture_thumb() {
-  local dir marker shot
+  local dir marker shot ffmpeg_bin
   dir="$(gs_shot_dir)"
   gs_log "screenshot dir for ${GS_S_EMULATOR}: ${dir}"
   if [ ! -d "${dir}" ]; then
     gs_log "screenshot dir does not exist, skipping capture"
     return 1
   fi
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    gs_log "ffmpeg not found, skipping capture"
+
+  # Prefer the confirmed on-device location over a bare PATH lookup: ffmpeg
+  # lands at /usr/bin/ffmpeg on every dArkOS build variant (a plain apt
+  # package on rk3326, a custom rockchip-mpp build installed to the same
+  # --prefix=/usr on rk3566).  `command -v ffmpeg` has been observed to
+  # succeed while a later bare `ffmpeg` call in the very same script run
+  # still failed with "not found" (exit 127) -- nothing in the OS build
+  # (systemd unit, sudoers, profile scripts) explains that discrepancy, so
+  # this at least removes PATH resolution as a variable for the common case.
+  if [ -x /usr/bin/ffmpeg ]; then
+    ffmpeg_bin=/usr/bin/ffmpeg
+  else
+    ffmpeg_bin="$(command -v ffmpeg 2>/dev/null)"
+  fi
+  if [ -z "${ffmpeg_bin}" ]; then
+    gs_log "ffmpeg not found (checked /usr/bin/ffmpeg and PATH=${PATH})"
     return 1
   fi
 
@@ -71,17 +85,20 @@ gs_capture_thumb() {
     gs_log "no new screenshot appeared in ${dir} within ${GS_SHOT_TIMEOUT}s"
     return 1
   fi
-  gs_log "captured ${shot}, converting to BMP"
+  gs_log "captured ${shot}, converting to BMP with ${ffmpeg_bin}"
 
   # The carousel reads BMP: SDL2_image's headers are stripped from the device
   # by cleanup_filesystem.sh, so the UI links against core SDL2 only.
-  ffmpeg -y -loglevel quiet -i "${shot}" \
+  # -loglevel error (not quiet) plus capturing output means an actual failure
+  # logs ffmpeg's own message instead of a bare, ambiguous exit code.
+  local ff_err rc
+  ff_err="$("${ffmpeg_bin}" -y -loglevel error -i "${shot}" \
     -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2" \
-    -pix_fmt bgr24 "${GS_THUMBS}/${GS_S_KEY}.bmp" >/dev/null 2>&1
-  local rc=$?
+    -pix_fmt bgr24 "${GS_THUMBS}/${GS_S_KEY}.bmp" 2>&1)"
+  rc=$?
   rm -f "${shot}" 2>/dev/null
   if [ "${rc}" -ne 0 ]; then
-    gs_log "ffmpeg conversion failed with exit ${rc}"
+    gs_log "ffmpeg conversion failed with exit ${rc}: ${ff_err}"
     return 1
   fi
   gs_fix_perm "${GS_THUMBS}/${GS_S_KEY}.bmp"

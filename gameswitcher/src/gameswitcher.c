@@ -439,27 +439,20 @@ static void draw_frame(SDL_Renderer *ren, SDL_Texture *atlas,
 /* ------------------------------------------------------------------ */
 
 /*
- * dArkOS handhelds are laid out Nintendo-style: global/buttonmon.sh reads the
- * face buttons as A=BTN_EAST, B=BTN_SOUTH, X=BTN_NORTH, Y=BTN_WEST, which SDL
- * reports as B, A, Y and X respectively.  Map by the label printed on the
- * shell, not by SDL's name, so the footer hints match the hardware.
+ * /opt/inttools/gamecontrollerdb.txt is letter-preserving, not positional:
+ * every dArkOS pad entry binds SDL's canonical "a" to whichever raw button
+ * index is that device's own printed A (confirmed across five different
+ * controller GUIDs, including one -- OpenSimHardware OSH PB -- that really
+ * is Xbox-laid-out, and it still comes out letter-preserving there too).
+ * So SDL_CONTROLLER_BUTTON_A always means "the button printed A" once this
+ * config file is loaded (gs-shim.sh and Game Switcher.sh both export
+ * SDL_GAMECONTROLLERCONFIG_FILE for exactly this reason) -- no Nintendo/Xbox
+ * distinction to make here at all.
  */
-static SDL_GameControllerButton btn_confirm = SDL_CONTROLLER_BUTTON_B;
-static SDL_GameControllerButton btn_back    = SDL_CONTROLLER_BUTTON_A;
-static SDL_GameControllerButton btn_restart = SDL_CONTROLLER_BUTTON_Y;
-static SDL_GameControllerButton btn_remove  = SDL_CONTROLLER_BUTTON_X;
-
-static void apply_button_layout(void)
-{
-    const char *layout = SDL_getenv("GS_BUTTON_LAYOUT");
-
-    if (layout && SDL_strcasecmp(layout, "xbox") == 0) {
-        btn_confirm = SDL_CONTROLLER_BUTTON_A;
-        btn_back    = SDL_CONTROLLER_BUTTON_B;
-        btn_restart = SDL_CONTROLLER_BUTTON_X;
-        btn_remove  = SDL_CONTROLLER_BUTTON_Y;
-    }
-}
+static const SDL_GameControllerButton btn_confirm = SDL_CONTROLLER_BUTTON_A;
+static const SDL_GameControllerButton btn_back    = SDL_CONTROLLER_BUTTON_B;
+static const SDL_GameControllerButton btn_restart = SDL_CONTROLLER_BUTTON_X;
+static const SDL_GameControllerButton btn_remove  = SDL_CONTROLLER_BUTTON_Y;
 
 static void open_controllers(void)
 {
@@ -558,7 +551,6 @@ int main(int argc, char **argv)
                     continue;
                 }
             }
-            apply_button_layout();
             open_controllers();
 
             if (SDL_GetCurrentDisplayMode(0, &mode) == 0 && mode.w > 0) {

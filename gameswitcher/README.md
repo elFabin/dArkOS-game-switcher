@@ -74,10 +74,13 @@ else and that combo goes to ogage exactly as before (Fn+D-pad for
 brightness, Fn+Volume for fine brightness, Fn+Power to shut down). The power
 button itself is untouched: a short press still just suspends.
 
-Face buttons follow the Nintendo layout dArkOS uses (`global/buttonmon.sh`
-reads A as `BTN_EAST`). Set `GS_BUTTON_LAYOUT=xbox` if yours is the other way
-round. On a device where Fn isn't code 708, use **Options > Advanced > Game
-Switcher Button** to relearn it — see [Settings](#settings).
+A/B/X/Y above are the buttons printed on the case, whatever their physical
+position — `/opt/inttools/gamecontrollerdb.txt` binds SDL's canonical button
+names directly to each device's own printed labels (confirmed across every
+controller dArkOS recognizes, not just this one), so `SDL_CONTROLLER_BUTTON_A`
+always means "the button labeled A." On a device where Fn isn't code 708, use
+**Options > Advanced > Game Switcher Button** to relearn it — see
+[Settings](#settings).
 
 ## What it changes
 
@@ -210,14 +213,22 @@ through a real input device — see `test/hotkey_case.sh`.
 
 ## On-device checklist
 
-1. `command -v cc`, `ls /usr/include/SDL2/SDL.h` — confirm the carousel can be
-   built (inferred from `needed_packages.txt`, not yet observed on hardware).
-2. Install, then run `gs-doctor.sh` over SSH and confirm all six RetroArch
-   keys read as expected. This alone should fix screenshots.
-3. Launch a game, tap Fn — the carousel should appear showing a real
-   screenshot of that exact frame, and EmulationStation should not flash up
-   in between games. See [above](#if-emulationstation-still-appears-to-take-over)
-   if it still does.
+Already confirmed working: the carousel builds and runs, Fn opens it, a
+screenshot is captured from RetroArch (the PNG lands correctly) — what's
+left to check is everything downstream of that plus the two other fixes in
+this round:
+
+1. Reinstall, then tap Fn on a running game — a thumbnail should now appear
+   (was failing at the ffmpeg conversion step; check `gameswitcher.log`
+   with `GS_DEBUG=1` if it still doesn't, which will now show ffmpeg's own
+   error message instead of a bare exit code).
+2. Press each of A/B/X/Y and confirm the action matches the printed label
+   (A=resume, B=back, X=start over, Y=remove) — this was inverted before;
+   the fix couldn't be tested off-device, so this is the one to watch most
+   closely.
+3. Set `GS_ES_FREEZE=1`, switch between games — EmulationStation should no
+   longer flash up in the gap (the freeze itself is what wasn't taking
+   effect before).
 4. Pick a second game; go back to the first — it should resume where you left.
 5. "Back to EmulationStation" should return to a responsive ES, not a restart.
 6. Quit a game normally (Select+Start) — should behave exactly as before.
