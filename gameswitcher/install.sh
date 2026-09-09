@@ -40,8 +40,10 @@ GS_HOME="${GS_HOME:-/home/${GS_USER}}"
 BIN="${ROOT}/usr/local/bin"
 OPT="${ROOT}/opt/gameswitcher"
 SYSMENU="${ROOT}/opt/system"
+SYSADV="${SYSMENU}/Advanced"
 STATE="${ROOT}${GS_HOME}/.config/gameswitcher"
 CFGBACKUP="${STATE}/retroarch-cfg.backup"
+CONF="${STATE}/gameswitcher.conf"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'Game Switcher: %s\n' "$*" >&2; exit 1; }
@@ -71,13 +73,14 @@ confirm() {
 preflight() {
   [ -d "${GS_SRC}/scripts" ] || die "payload not found next to $0"
 
-  # Quick Mode rewrites the same pause.sh and the same four RetroArch keys we
-  # do.  Running both would leave whichever was installed last in charge and
-  # make the uninstall of either one wrong.
+  # Quick Mode rewrites the same RetroArch settings we do (and pause.sh too,
+  # if the power trigger is in use).  Running both would leave whichever was
+  # installed last in charge and make the uninstall of either one wrong.
   if [ -e "${ROOT}/usr/local/bin/quickmode.sh" ]; then
     die "Quick Mode is enabled.  Run Options > Advanced > Disable Quick Mode
-first, then install the Game Switcher.  They both take over pause.sh and the
-RetroArch savestate settings, so only one can be active at a time."
+first, then install the Game Switcher.  They both take over the RetroArch
+savestate settings (and pause.sh, with the power trigger), so only one can be
+active at a time."
   fi
 
   if [ ! -e "${BIN}/retroarch" ]; then
@@ -125,6 +128,15 @@ patch_retroarch() {
       set_cfg "${cfg}" savestate_auto_load  "true"
       set_cfg "${cfg}" network_cmd_enable   "true"
       set_cfg "${cfg}" screenshot_directory "${GS_HOME}/.config/gameswitcher/shots"
+      # screenshots_in_content_dir OVERRIDES screenshot_directory, and dArkOS
+      # ships it on.  Left alone, RetroArch drops the PNG next to the ROM --
+      # where we never look, and where ES would scrape it as a PICO-8 cart,
+      # since .png is a real ROM extension for the fake08 core.
+      set_cfg "${cfg}" screenshots_in_content_dir "false"
+      # Take the shot from the core's framebuffer rather than glReadPixels on
+      # the Mali blob: more reliable, and a cleaner thumbnail with no shaders
+      # or overlays baked in.
+      set_cfg "${cfg}" video_gpu_screenshot "false"
     done
   done
 }
@@ -137,14 +149,58 @@ is_shim() {
   grep -q 'gs-shim' "$1" 2>/dev/null
 }
 
+# GS_TRIGGER decides whether pause.sh gets hooked at all: with the default
+# (fn), the power button is never touched, so this has to be known before
+# that decision -- read whichever config is about to be effective (an
+# already-installed one if this is a reinstall, otherwise the shipped
+# default), the same value gs-common.sh would end up sourcing.
+effective_trigger() {
+  local src="${CONF}"
+  [ -f "${src}" ] || src="${GS_SRC}/config/gameswitcher.conf"
+  local value
+  value="$(grep -m1 '^GS_TRIGGER=' "${src}" 2>/dev/null | cut -d= -f2)"
+  printf '%s' "${value:-fn}"
+}
+
+# The power-button hook is a system file (pause.sh), unlike every other
+# trigger setting, so switching it on or off is an install-time action, not
+# a live one -- this mirrors it against whatever GS_TRIGGER now says.
+sync_pause_hook() {
+  local trigger; trigger="$(effective_trigger)"
+  case "${trigger}" in
+    power|both)
+      if [ -e "${BIN}/pause.sh" ] && ! grep -q 'gs-suspend' "${BIN}/pause.sh" 2>/dev/null; then
+        ${SUDO} cp "${BIN}/pause.sh" "${BIN}/pause.sh.gs-orig"
+      fi
+      ${SUDO} cp "${GS_SRC}/scripts/pause.sh.gs" "${BIN}/pause.sh"
+      ${SUDO} chmod 777 "${BIN}/pause.sh"
+      ;;
+    *)
+      # fn-only (the default): pause.sh is never touched on a fresh install.
+      # On a reinstall after switching away from power/both, put back
+      # whatever this tool itself backed up, so a mode change actually
+      # takes hold rather than leaving the hook installed but inert.
+      if [ -e "${BIN}/pause.sh.gs-orig" ] && grep -q 'gs-suspend' "${BIN}/pause.sh" 2>/dev/null; then
+        ${SUDO} cp -f "${BIN}/pause.sh.gs-orig" "${BIN}/pause.sh"
+        ${SUDO} chmod 777 "${BIN}/pause.sh"
+        ${SUDO} rm -f "${BIN}/pause.sh.gs-orig"
+      fi
+      ;;
+  esac
+  [ -e "${BIN}/pause.sh.gs-orig" ] && ${SUDO} chmod 777 "${BIN}/pause.sh.gs-orig"
+}
+
 install_scripts() {
   local emulator
 
-  ${SUDO} mkdir -p "${BIN}" "${OPT}/orig" "${SYSMENU}" "${STATE}/thumbs" "${STATE}/shots"
+  ${SUDO} mkdir -p "${BIN}" "${OPT}/orig" "${SYSMENU}" "${SYSADV}" \
+                   "${STATE}/thumbs" "${STATE}/shots"
 
-  ${SUDO} cp "${GS_SRC}/scripts/gs-common.sh"  "${BIN}/gs-common.sh"
-  ${SUDO} cp "${GS_SRC}/scripts/gs-suspend.sh" "${BIN}/gs-suspend.sh"
-  ${SUDO} cp "${GS_SRC}/scripts/gs-menu.sh"    "${BIN}/gs-menu.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/gs-common.sh"   "${BIN}/gs-common.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/gs-suspend.sh"  "${BIN}/gs-suspend.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/gs-menu.sh"     "${BIN}/gs-menu.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/gs-hotkeyd.py"  "${BIN}/gs-hotkeyd.py"
+  ${SUDO} cp "${GS_SRC}/scripts/gs-doctor.sh"   "${BIN}/gs-doctor.sh"
 
   # Move each stock RetroArch wrapper aside, keeping its original basename:
   # it branches on `basename "$0"` to serve retroarch and retroarch32 alike.
@@ -156,25 +212,25 @@ install_scripts() {
     ${SUDO} cp "${GS_SRC}/scripts/gs-shim.sh" "${BIN}/${emulator}"
   done
 
-  # pause.sh is what ogage runs on a power short-press.
-  if [ -e "${BIN}/pause.sh" ] && ! grep -q 'gs-suspend' "${BIN}/pause.sh" 2>/dev/null; then
-    ${SUDO} cp "${BIN}/pause.sh" "${BIN}/pause.sh.gs-orig"
-  fi
-  ${SUDO} cp "${GS_SRC}/scripts/pause.sh.gs" "${BIN}/pause.sh"
-
   ${SUDO} cp "${GS_SRC}/scripts/Game Switcher.sh" "${SYSMENU}/Game Switcher.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/Game Switcher Button.sh" "${SYSADV}/Game Switcher Button.sh"
+  ${SUDO} cp "${GS_SRC}/scripts/Game Switcher Diagnostics.sh" "${SYSADV}/Game Switcher Diagnostics.sh"
 
   # Ship the tunables as a commented file, but never clobber an edited one.
-  if [ ! -f "${STATE}/gameswitcher.conf" ] && [ -f "${GS_SRC}/config/gameswitcher.conf" ]; then
-    ${SUDO} cp "${GS_SRC}/config/gameswitcher.conf" "${STATE}/gameswitcher.conf"
+  if [ ! -f "${CONF}" ] && [ -f "${GS_SRC}/config/gameswitcher.conf" ]; then
+    ${SUDO} cp "${GS_SRC}/config/gameswitcher.conf" "${CONF}"
   fi
 
+  # Decided from GS_TRIGGER now that the config above is in its final state.
+  sync_pause_hook
+
   ${SUDO} chmod 777 "${BIN}/gs-common.sh" "${BIN}/gs-suspend.sh" "${BIN}/gs-menu.sh" \
-                    "${BIN}/pause.sh" "${SYSMENU}/Game Switcher.sh"
+                    "${BIN}/gs-hotkeyd.py" "${BIN}/gs-doctor.sh" \
+                    "${SYSMENU}/Game Switcher.sh" \
+                    "${SYSADV}/Game Switcher Button.sh" "${SYSADV}/Game Switcher Diagnostics.sh"
   for emulator in retroarch retroarch32; do
     [ -e "${BIN}/${emulator}" ] && ${SUDO} chmod 777 "${BIN}/${emulator}"
   done
-  [ -e "${BIN}/pause.sh.gs-orig" ] && ${SUDO} chmod 777 "${BIN}/pause.sh.gs-orig"
   ${SUDO} chmod 777 "${OPT}/orig"/* 2>/dev/null
 
   ${SUDO} chmod 777 "${STATE}" "${STATE}/thumbs" "${STATE}/shots"
@@ -240,8 +296,22 @@ if [ -z "${ROOT}" ]; then
 fi
 
 say ""
-say "Done.  Press the power button briefly while a RetroArch game is running"
-say "to snapshot it and open the switcher.  The carousel is also under"
-say "Options > Game Switcher."
+case "$(effective_trigger)" in
+  power)
+    say "Done.  Press the power button briefly while a RetroArch game is"
+    say "running to snapshot it and open the switcher."
+    ;;
+  both)
+    say "Done.  Tap Fn, or press the power button briefly, while a RetroArch"
+    say "game is running to snapshot it and open the switcher."
+    ;;
+  *)
+    say "Done.  Tap Fn briefly while a RetroArch game is running to snapshot"
+    say "it and open the switcher.  (On a device other than the A10 Mini,"
+    say "use Options > Advanced > Game Switcher Button to teach it the right"
+    say "button.)  The power button still just suspends."
+    ;;
+esac
+say "The carousel is also reachable from Options > Game Switcher."
 [ -z "${ASSUME_YES}" ] && sleep 4
 exit 0

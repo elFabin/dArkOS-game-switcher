@@ -27,6 +27,7 @@ GS_HOME="${GS_HOME:-/home/${GS_USER}}"
 BIN="${ROOT}/usr/local/bin"
 OPT="${ROOT}/opt/gameswitcher"
 SYSMENU="${ROOT}/opt/system"
+SYSADV="${SYSMENU}/Advanced"
 STATE="${ROOT}${GS_HOME}/.config/gameswitcher"
 CFGBACKUP="${STATE}/retroarch-cfg.backup"
 
@@ -77,6 +78,9 @@ for emulator in retroarch retroarch32; do
   fi
 done
 
+# pause.sh is only ever hooked when the power trigger was requested at
+# install time, but a leftover pause.sh.gs-orig means it was -- restore it
+# unconditionally so a stray hook is never left behind either way.
 if [ -e "${BIN}/pause.sh.gs-orig" ]; then
   ${SUDO} cp -f "${BIN}/pause.sh.gs-orig" "${BIN}/pause.sh"
   ${SUDO} chmod 777 "${BIN}/pause.sh"
@@ -85,8 +89,12 @@ fi
 
 restore_cfg
 
-${SUDO} rm -f "${BIN}/gs-common.sh" "${BIN}/gs-suspend.sh" "${BIN}/gs-menu.sh"
-${SUDO} rm -f "${SYSMENU}/Game Switcher.sh"
+${SUDO} pkill -f gs-hotkeyd.py 2>/dev/null
+
+${SUDO} rm -f "${BIN}/gs-common.sh" "${BIN}/gs-suspend.sh" "${BIN}/gs-menu.sh" \
+              "${BIN}/gs-hotkeyd.py" "${BIN}/gs-doctor.sh"
+${SUDO} rm -f "${SYSMENU}/Game Switcher.sh" \
+              "${SYSADV}/Game Switcher Button.sh" "${SYSADV}/Game Switcher Diagnostics.sh"
 ${SUDO} rm -rf "${OPT}"
 rm -f "${GS_RUN:-/dev/shm}"/gs_session "${GS_RUN:-/dev/shm}"/gs_switch \
        "${GS_RUN:-/dev/shm}"/gs_choice 2>/dev/null

@@ -22,8 +22,12 @@ sudo cp gameswitcher/scripts/gs-common.sh   Arkbuild/opt/gameswitcher/payload/sc
 sudo cp gameswitcher/scripts/gs-shim.sh     Arkbuild/opt/gameswitcher/payload/scripts/
 sudo cp gameswitcher/scripts/gs-suspend.sh  Arkbuild/opt/gameswitcher/payload/scripts/
 sudo cp gameswitcher/scripts/gs-menu.sh     Arkbuild/opt/gameswitcher/payload/scripts/
+sudo cp gameswitcher/scripts/gs-hotkeyd.py  Arkbuild/opt/gameswitcher/payload/scripts/
+sudo cp gameswitcher/scripts/gs-doctor.sh   Arkbuild/opt/gameswitcher/payload/scripts/
 sudo cp gameswitcher/scripts/pause.sh.gs    Arkbuild/opt/gameswitcher/payload/scripts/
 sudo cp gameswitcher/scripts/"Game Switcher.sh" Arkbuild/opt/gameswitcher/payload/scripts/
+sudo cp gameswitcher/scripts/"Game Switcher Button.sh" Arkbuild/opt/gameswitcher/payload/scripts/
+sudo cp gameswitcher/scripts/"Game Switcher Diagnostics.sh" Arkbuild/opt/gameswitcher/payload/scripts/
 sudo cp gameswitcher/config/gameswitcher.conf Arkbuild/opt/gameswitcher/payload/config/
 
 # Compile the carousel now, while libsdl2-dev is still on the image.

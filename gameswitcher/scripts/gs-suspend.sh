@@ -41,13 +41,21 @@ gs_shot_dir() {
 gs_capture_thumb() {
   local dir marker shot
   dir="$(gs_shot_dir)"
-  [ -d "${dir}" ] || return 1
-  command -v ffmpeg >/dev/null 2>&1 || return 1
+  gs_log "screenshot dir for ${GS_S_EMULATOR}: ${dir}"
+  if [ ! -d "${dir}" ]; then
+    gs_log "screenshot dir does not exist, skipping capture"
+    return 1
+  fi
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    gs_log "ffmpeg not found, skipping capture"
+    return 1
+  fi
 
   local waited
   marker="${dir}/.gs-marker"
   : > "${marker}" 2>/dev/null || return 1
 
+  gs_log "sending SCREENSHOT to 127.0.0.1:${GS_RA_PORT}"
   gs_ra_cmd SCREENSHOT
 
   waited=0
@@ -59,7 +67,11 @@ gs_capture_thumb() {
     waited=$(( waited + 1 ))
   done
   rm -f "${marker}" 2>/dev/null
-  [ -n "${shot}" ] || return 1
+  if [ -z "${shot}" ]; then
+    gs_log "no new screenshot appeared in ${dir} within ${GS_SHOT_TIMEOUT}s"
+    return 1
+  fi
+  gs_log "captured ${shot}, converting to BMP"
 
   # The carousel reads BMP: SDL2_image's headers are stripped from the device
   # by cleanup_filesystem.sh, so the UI links against core SDL2 only.
@@ -68,7 +80,10 @@ gs_capture_thumb() {
     -pix_fmt bgr24 "${GS_THUMBS}/${GS_S_KEY}.bmp" >/dev/null 2>&1
   local rc=$?
   rm -f "${shot}" 2>/dev/null
-  [ "${rc}" -eq 0 ] || return 1
+  if [ "${rc}" -ne 0 ]; then
+    gs_log "ffmpeg conversion failed with exit ${rc}"
+    return 1
+  fi
   gs_fix_perm "${GS_THUMBS}/${GS_S_KEY}.bmp"
 }
 
@@ -80,6 +95,7 @@ gs_capture_thumb || gs_log "no thumbnail captured for ${GS_S_ROM}"
 gs_fix_perm "${GS_SWITCH}"
 
 # Two QUITs is what Quick Mode sends; RetroArch's quit_press_twice is on.
+gs_log "quitting ${GS_S_EMULATOR} (${GS_S_ROM})"
 gs_ra_cmd QUIT
 gs_ra_cmd QUIT
 

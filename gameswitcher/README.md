@@ -1,9 +1,9 @@
 # dArkOS Game Switcher
 
-An Onion OS-style Game Switcher for dArkOS. Press the power button briefly
-while a RetroArch game is running: the game is snapshotted, and a carousel of
-your recent games appears, each showing a screenshot of exactly where you left
-it. Pick one and it resumes from that moment.
+An Onion OS-style Game Switcher for dArkOS. Tap Fn briefly while a RetroArch
+game is running: the game is snapshotted, and a carousel of your recent games
+appears, each showing a screenshot of exactly where you left it. Pick one and
+it resumes from that moment.
 
 Built and tested against an **A10 Mini** (RK3326, 640x480). It should work on
 any dArkOS device, but only the A10 Mini has been targeted deliberately.
@@ -24,11 +24,11 @@ one command ES is waiting on. ES never gets the screen back, so switching
 games costs a game launch rather than an ES restart.
 
 ```
-power short-press -> ogage -> pause.sh -> gs-suspend.sh
-                                            SCREENSHOT ---(udp 55355)--> RetroArch
-                                            thumbnail  ---(ffmpeg)-----> thumbs/<key>.bmp
-                                            QUIT       ---(udp 55355)--> RetroArch
-                                                                        (writes <rom>.state.auto)
+Fn tap (clean, no combo) -> gs-hotkeyd.py -> gs-suspend.sh
+                                               SCREENSHOT ---(udp 55355)--> RetroArch
+                                               thumbnail  ---(ffmpeg)-----> thumbs/<key>.bmp
+                                               QUIT       ---(udp 55355)--> RetroArch
+                                                                           (writes <rom>.state.auto)
 ES -> gs-shim -> [game] -> switch requested? -> carousel -> [next game] -> ...
                         -> normal quit?      -> back to EmulationStation
 ```
@@ -48,8 +48,9 @@ On the device, unzip `GameSwitcher.zip` into `/roms/tools`, then run
 
 Build the drop-in from a checkout with `make package`.
 
-The installer refuses to run while Quick Mode is enabled — both take over
-`pause.sh` and the same four RetroArch settings. Disable Quick Mode first.
+The installer refuses to run while Quick Mode is enabled — both take over the
+RetroArch savestate settings (and `pause.sh`, if you use the power trigger).
+Disable Quick Mode first.
 
 To remove it: `./uninstall.sh`, or the same Options entry, which turns into
 the uninstaller once the switcher is active. Everything it changed is backed
@@ -59,7 +60,7 @@ up first and restored exactly.
 
 | Button | Action |
 |---|---|
-| Power (short press, in game) | Snapshot the game and open the switcher |
+| Fn (tap, in game) | Snapshot the game and open the switcher |
 | Left / Right | Move through recent games |
 | A | Resume where you left off |
 | X | Start over (the auto savestate is moved aside, not deleted) |
@@ -67,33 +68,93 @@ up first and restored exactly.
 | B | Back to EmulationStation |
 | Start | Sleep |
 
+Fn is the A10 Mini's `system_hk` button (evdev `BTN_TRIGGER_HAPPY5`, code
+708). Only a *clean tap* opens the switcher — hold it and press something
+else and that combo goes to ogage exactly as before (Fn+D-pad for
+brightness, Fn+Volume for fine brightness, Fn+Power to shut down). The power
+button itself is untouched: a short press still just suspends.
+
 Face buttons follow the Nintendo layout dArkOS uses (`global/buttonmon.sh`
 reads A as `BTN_EAST`). Set `GS_BUTTON_LAYOUT=xbox` if yours is the other way
-round.
-
-Long-pressing power still powers off, and a short press outside a RetroArch
-game still suspends — the hook defers to the stock `pause.sh` in every case it
-does not handle.
+round. On a device where Fn isn't code 708, use **Options > Advanced > Game
+Switcher Button** to relearn it — see [Settings](#settings).
 
 ## What it changes
 
 | Path | Change |
 |---|---|
 | `/usr/local/bin/retroarch`, `retroarch32` | Replaced by the shim; originals kept in `/opt/gameswitcher/orig/` |
-| `/usr/local/bin/pause.sh` | Replaced by the hook; original kept as `pause.sh.gs-orig` |
-| `~/.config/retroarch{,32}/retroarch.cfg` and `.bak` | `savestate_auto_save`, `savestate_auto_load`, `network_cmd_enable` on; `screenshot_directory` pointed at the switcher's folder. Previous values recorded for the uninstaller |
+| `/usr/local/bin/pause.sh` | Only touched if `GS_TRIGGER` includes `power` — see [Settings](#settings). Original kept as `pause.sh.gs-orig` |
+| `~/.config/retroarch{,32}/retroarch.cfg` and `.bak` | `savestate_auto_save`, `savestate_auto_load`, `network_cmd_enable` on; `screenshots_in_content_dir`, `video_gpu_screenshot` off; `screenshot_directory` pointed at the switcher's folder. Previous values recorded for the uninstaller |
 | `/opt/system/Game Switcher.sh` | New Options entry |
-| `~/.config/gameswitcher/` | Recents list, thumbnails, screenshots |
+| `/opt/system/Advanced/Game Switcher Button.sh`, `Game Switcher Diagnostics.sh` | New Advanced entries |
+| `~/.config/gameswitcher/` | Recents list, thumbnails, screenshots, settings, log |
 
 The `.bak` config is patched alongside the live one because dArkOS restores
 settings from it.
 
+`screenshots_in_content_dir` is the reason screenshots didn't show up before
+this key was added: it silently overrides `screenshot_directory`, so
+RetroArch was writing the PNG next to the ROM instead of where the switcher
+was looking — and worse, `.png` is also PICO-8's ROM extension, so leaving it
+on risks EmulationStation scraping a screenshot as a cart.
+
 ## Settings
 
-`~/.config/gameswitcher/gameswitcher.conf` holds the tunables — how many games
-the carousel remembers, how long to wait for a savestate before forcing the
-quit, and whether to re-run `perfmax` (the launch splash) when switching. It is
-installed with comments and never overwritten by a reinstall.
+`~/.config/gameswitcher/gameswitcher.conf` holds the tunables, installed with
+comments and never overwritten by a reinstall. Most take effect on the next
+game launch with no reinstall needed — the two exceptions are called out
+below.
+
+- **`GS_TRIGGER`** (`fn` / `power` / `both`, default `fn`) — what opens the
+  switcher. Switching *to* `power` or `both` needs a reinstall (it has to
+  hook the system `pause.sh`); switching back to `fn` alone takes effect
+  immediately.
+- **`GS_HOTKEY_CODE`** / **`GS_HOTKEY_DEVICE`** — the Fn button's evdev code
+  (708 by default, the A10 Mini's `system_hk`) and device name (blank matches
+  any device that can emit the code). Use **Options > Advanced > Game
+  Switcher Button** to relearn these on a different device instead of editing
+  them by hand.
+- **`GS_SHOW_SPLASH`** (default `0`) — re-run `perfmax`'s launch splash when
+  switching games. Off by default: it's a second DRM/KMS client
+  (`image-viewer`) landing right in the handover between one game and the
+  next, plus a `~/.asoundrc` deletion on rk3326 that only EmulationStation's
+  own game-end hook restores.
+- **`GS_ES_FREEZE`** (default `0`) — `SIGSTOP` EmulationStation for the life
+  of the switch loop and `SIGCONT` it on every exit path, including a crash
+  (a background watchdog resumes it even if the shim is killed outright).
+  Off by default: see [If EmulationStation still appears to "take
+  over"](#if-emulationstation-still-appears-to-take-over) before turning this
+  on.
+- **`GS_QUIT_TIMEOUT`**, **`GS_SHOT_TIMEOUT`**, **`GS_MAX_RECENTS`**,
+  **`GS_RA_PORT`** — as before.
+- **`GS_DEBUG`** (default `0`) — log switches, screenshot attempts, UI starts
+  and Fn taps, with timestamps, to `~/.config/gameswitcher/gameswitcher.log`.
+  Turn on when reporting a problem; noisy for everyday use.
+
+Run **`gs-doctor.sh`** over SSH (or **Options > Advanced > Game Switcher
+Diagnostics** for a short on-device summary) to see the six RetroArch config
+keys across all four config files, whether the network-command port answers,
+whether `ffmpeg`/`nc`/`python3` are present, the configured Fn code and
+whether its watcher is running, and the tail of the debug log.
+
+## If EmulationStation still appears to "take over"
+
+The most likely cause is a lost race for the display, not EmulationStation
+actually running: `amiberry/amiberry.sh` documents this exact class of bug
+for AmiBerry's own launch (`EmulationStation hasn't fully released DRM
+master`), worked around there with a settle delay and retries. The carousel
+does the same — a brief delay, then up to five attempts at starting SDL —
+and `GS_SHOW_SPLASH=0` (the default) removes a second DRM client that used to
+land in the same handover window. If it still happens after those two:
+
+1. Set `GS_DEBUG=1` and reproduce it; `gameswitcher.log`'s SDL error lines
+   will say whether a retry attempt actually failed.
+2. Try `GS_ES_FREEZE=1`. This stops EmulationStation outright for the life of
+   the switch loop, which addresses the symptom directly regardless of cause
+   — but a frozen process looks exactly like a dead device if it's ever left
+   that way, so it ships off and is meant as a second resort, not the first
+   fix to reach for.
 
 ## Scope
 
@@ -109,9 +170,13 @@ save-and-quit adapter.
 src/gameswitcher.c   the carousel (core SDL2 only)
 src/font.h           baked-in glyph atlas, generated by tools/genfont.py
 scripts/gs-shim.sh   the switch loop, installed over /usr/local/bin/retroarch
-scripts/gs-suspend.sh  snapshot + quit, reached from pause.sh
+scripts/gs-suspend.sh  snapshot + quit, run by the Fn watcher (or pause.sh)
+scripts/gs-hotkeyd.py  the Fn-tap watcher, started for the life of a game
 scripts/gs-menu.sh   dialog fallback UI, used where the carousel can't be built
-scripts/gs-common.sh shared helpers: the recents store, RetroArch commands
+                     or fails to start
+scripts/gs-doctor.sh Game Switcher diagnostics (config, tools, hotkey, log)
+scripts/gs-common.sh shared helpers: the recents store, RetroArch commands,
+                     the optional EmulationStation freeze
 test/run_tests.sh    off-device test suite
 ```
 
@@ -119,8 +184,9 @@ The carousel deliberately links against **core SDL2 only**. dArkOS's
 `cleanup_filesystem.sh` strips the SDL2_image and SDL2_ttf headers from the
 image while `needed_packages.txt` keeps `libsdl2-dev`, so thumbnails are BMPs
 written by `ffmpeg` and text comes from the baked-in font atlas. If no
-compiler is present the installer falls back to the `dialog` menu, which needs
-nothing beyond what every other dArkOS tool already uses.
+compiler is present, or the carousel fails to start even after its retries,
+the installer/shim fall back to the `dialog` menu, which needs nothing beyond
+what every other dArkOS tool already uses.
 
 ## Tests
 
@@ -128,20 +194,35 @@ nothing beyond what every other dArkOS tool already uses.
 make && make check
 ```
 
-Covers the recents store, the shim's switch loop against a stubbed RetroArch
-and carousel, the install/uninstall round trip on a staging tree, and a
-headless render of the UI. Nothing here can talk to a real device, so also
+Covers the recents store, the Fn-tap detector's clean-tap/combo/long-press
+logic, the shim's switch loop (including the Fn watcher's lifecycle, the
+carousel's fallback to the text menu, and the optional EmulationStation
+freeze/resume, all against stubs), the install/uninstall round trip on a
+staging tree (including switching `GS_TRIGGER` between `fn` and `power`), and
+a headless render of the UI. Nothing here can talk to a real device, so also
 walk the on-device checklist below after installing.
+
+There's no `/dev/uinput` in most build sandboxes to synthesize real button
+presses with, so the tap/combo/long-press state machine
+(`gs-hotkeyd.py`'s `TapDetector`) is factored out to take plain
+`(code, value, time)` tuples and is exercised directly with those instead of
+through a real input device — see `test/hotkey_case.sh`.
 
 ## On-device checklist
 
 1. `command -v cc`, `ls /usr/include/SDL2/SDL.h` — confirm the carousel can be
    built (inferred from `needed_packages.txt`, not yet observed on hardware).
-2. Launch a RetroArch game, short-press power — the carousel should appear
-   showing that exact frame.
-3. Pick a second game; go back to the first — it should resume where you left.
-4. "Back to EmulationStation" should return to a responsive ES, not a restart.
-5. Quit a game normally (Select+Start) — should behave exactly as before.
-6. Power press in ES suspends; long press powers off.
-7. Power press inside DraStic still suspends — no regression for standalones.
-8. `./uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.
+2. Install, then run `gs-doctor.sh` over SSH and confirm all six RetroArch
+   keys read as expected. This alone should fix screenshots.
+3. Launch a game, tap Fn — the carousel should appear showing a real
+   screenshot of that exact frame, and EmulationStation should not flash up
+   in between games. See [above](#if-emulationstation-still-appears-to-take-over)
+   if it still does.
+4. Pick a second game; go back to the first — it should resume where you left.
+5. "Back to EmulationStation" should return to a responsive ES, not a restart.
+6. Quit a game normally (Select+Start) — should behave exactly as before.
+7. Fn+D-pad brightness, Fn+Volume, and Fn+Power (shutdown) should all still
+   work — the clean-tap rule is what protects them from the switcher.
+8. A plain power press should suspend, both in EmulationStation and mid-game.
+9. Power press inside DraStic still suspends — no regression for standalones.
+10. `./uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.

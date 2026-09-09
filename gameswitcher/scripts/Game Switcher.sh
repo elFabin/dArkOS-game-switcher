@@ -20,7 +20,11 @@ run_ui() {
     SDL_VIDEO_EGL_DRIVER="libEGL.so" \
     SDL_GAMECONTROLLERCONFIG_FILE="/opt/inttools/gamecontrollerdb.txt" \
       "${GS_OPT}/gameswitcher"
-    return $?
+    local rc=$?
+    if [ "${rc}" -ne "${GS_UI_FAILED_RC:-12}" ]; then
+      return "${rc}"
+    fi
+    gs_log "carousel failed to start, falling back to the text menu"
   fi
   "${GS_BIN}/gs-menu.sh"
 }

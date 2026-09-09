@@ -12,6 +12,10 @@
 # The stock dArkOS wrapper is preserved at /opt/gameswitcher/orig/<name> and
 # still invoked under its original basename, because it branches on
 # `basename "$0"` to serve both retroarch and retroarch32.
+#
+# Also runs the Fn-tap watcher (gs-hotkeyd.py) for the life of the loop when
+# GS_TRIGGER includes "fn", and optionally freezes EmulationStation
+# (GS_ES_FREEZE=1) for the same span -- see gs-common.sh for both.
 #############################################################################
 
 # shellcheck disable=SC1090
@@ -44,7 +48,10 @@ gs_parse_args() {
 
 # ---------------------------------------------------------------------------
 # Run the switcher UI.  The SDL2 carousel is preferred; the dialog menu is the
-# fallback wherever it could not be compiled.
+# fallback wherever it could not be compiled, and also the fallback for a
+# single failed run (a lost DRM-master race, say) rather than exit codes 10
+# and 11, so a failed carousel degrades to the text menu instead of silently
+# dumping the player back to EmulationStation.
 # ---------------------------------------------------------------------------
 gs_run_ui() {
   rm -f "${GS_CHOICE}" 2>/dev/null
@@ -52,9 +59,47 @@ gs_run_ui() {
     SDL_VIDEO_EGL_DRIVER="libEGL.so" \
     SDL_GAMECONTROLLERCONFIG_FILE="/opt/inttools/gamecontrollerdb.txt" \
       "${GS_OPT}/gameswitcher"
-    return $?
+    local rc=$?
+    if [ "${rc}" -ne "${GS_UI_FAILED_RC:-12}" ]; then
+      return "${rc}"
+    fi
+    gs_log "carousel failed to start, falling back to the text menu"
   fi
   "${GS_BIN}/gs-menu.sh"
+}
+
+# ---------------------------------------------------------------------------
+# The Fn-tap watcher (GS_TRIGGER=fn|both).  Started once for the whole switch
+# session and stopped on every exit path, the same bracket ppsspp/ppsspp.sh
+# puts around watchpsp.sh.  It fires gs-suspend.sh itself; the shim only has
+# to keep it alive for exactly as long as a game might be running.
+# ---------------------------------------------------------------------------
+GS_HOTKEYD_PID=""
+
+gs_hotkeyd_start() {
+  case "${GS_TRIGGER}" in
+    fn|both) ;;
+    *) return 0 ;;
+  esac
+  command -v python3 >/dev/null 2>&1 || return 0
+  [ -x "${GS_BIN}/gs-hotkeyd.py" ] || return 0
+  # Deliberately not `disown`ed: gs_hotkeyd_stop needs `wait` to actually
+  # reap this PID on the way out, and `disown` (tested directly) makes bash
+  # report a successful wait without ever calling waitpid(), leaving a
+  # zombie behind instead.  We're never in an interactive shell here (ES
+  # runs us via `sh -c "..."`), so there is no job-control status line to
+  # suppress in the first place.
+  GS_HOTKEY_CODE="${GS_HOTKEY_CODE}" GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE}" \
+    GS_HOTKEY_ACTION="${GS_BIN}/gs-suspend.sh" \
+    "${GS_BIN}/gs-hotkeyd.py" &
+  GS_HOTKEYD_PID=$!
+}
+
+gs_hotkeyd_stop() {
+  [ -n "${GS_HOTKEYD_PID}" ] || return 0
+  kill "${GS_HOTKEYD_PID}" 2>/dev/null
+  wait "${GS_HOTKEYD_PID}" 2>/dev/null
+  GS_HOTKEYD_PID=""
 }
 
 # perfmax draws the launch splash for a ROM and pins the governors.  ES only
@@ -94,7 +139,16 @@ if [ ! -x "${orig}" ]; then
   exec "/opt/retroarch/bin/${emulator}" -c "${GS_HOME}/.config/${emulator}/retroarch.cfg" "$@"
 fi
 
-trap 'gs_session_clear' EXIT
+# Self-heal first: a prior run that was killed outright (SIGKILL bypasses any
+# trap) may have left EmulationStation frozen.  Always start from a known
+# state before possibly freezing it again ourselves.
+gs_es_resume
+
+trap 'gs_session_clear; gs_es_resume; gs_hotkeyd_stop' EXIT
+
+gs_es_freeze
+gs_es_watchdog_start "$$"
+gs_hotkeyd_start
 
 args=("$@")
 rc=0
@@ -115,6 +169,10 @@ while true; do
   # to EmulationStation exactly as the stock wrapper would.
   [ -e "${GS_SWITCH}" ] || break
   rm -f "${GS_SWITCH}" 2>/dev/null
+
+  # Let a just-exited RetroArch's GPU/DRM teardown actually settle before we
+  # contend for the display -- see gs_wait_for_teardown's comment.
+  gs_wait_for_teardown
 
   # Stay in the switcher until the player picks a game or leaves.
   relaunch=""
@@ -150,9 +208,14 @@ while true; do
 
   # A game from another system may want a different RetroArch build; switching
   # emulator here would need a different orig wrapper, so re-exec ourselves
-  # under the right name instead.
+  # under the right name instead.  A successful exec replaces this process
+  # outright, so our EXIT trap never runs for it: stop what only we know
+  # about first.  ES itself needs no such care -- the freshly exec'd shim
+  # (still gs-shim.sh, just under the other emulator's name) unconditionally
+  # self-heals with its own gs_es_resume before it re-freezes.
   if [ -n "${GS_C_EMULATOR}" ] && [ "${GS_C_EMULATOR}" != "${emulator}" ] \
      && [ -x "${GS_BIN}/${GS_C_EMULATOR}" ]; then
+    gs_hotkeyd_stop
     gs_splash "${GS_C_ROM}"
     exec "${GS_BIN}/${GS_C_EMULATOR}" -L "${GS_C_CORE}" "${GS_C_ROM}"
   fi

@@ -13,6 +13,14 @@
  *   0   a choice was written to the out file
  *   10  back to EmulationStation
  *   11  sleep
+ *   12  could not start at all (gs-shim.sh falls back to the text menu)
+ *
+ * amiberry/amiberry.sh documents EmulationStation not always having fully
+ * released DRM master by the time its child's SDL2 KMS/DRM video init runs,
+ * and works around it with a settle delay plus retries.  The same race can
+ * happen here, between one game exiting and this carousel starting, so
+ * SDL_Init/SDL_CreateWindow/SDL_CreateRenderer get the same treatment below
+ * rather than a single attempt that gives up straight back to ES.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -29,9 +37,16 @@
 #define MAX_ENTRIES 64
 #define MAX_PATH    1024
 
-#define EXIT_CHOICE 0
-#define EXIT_BACK   10
-#define EXIT_SLEEP  11
+#define EXIT_CHOICE    0
+#define EXIT_BACK      10
+#define EXIT_SLEEP     11
+#define EXIT_UI_FAILED 12
+
+/* Matches amiberry.sh's own numbers: a short settle delay before each try,
+ * up to five attempts total.  Overridable so tests don't have to spend
+ * seconds per run waiting out a deliberately-broken video driver. */
+#define DEFAULT_INIT_ATTEMPTS    5
+#define DEFAULT_INIT_DELAY_MS  500
 
 #define THUMB_W 320
 #define THUMB_H 240
@@ -465,6 +480,17 @@ static void usage(void)
             "                    [--dump FILE.bmp] [--size WxH] [--select N]\n");
 }
 
+static int env_int_or(const char *name, int fallback)
+{
+    const char *s = SDL_getenv(name);
+    int n;
+
+    if (!s || !*s)
+        return fallback;
+    n = atoi(s);
+    return n >= 0 ? n : fallback;
+}
+
 int main(int argc, char **argv)
 {
     const char *dump = NULL;
@@ -512,45 +538,71 @@ int main(int argc, char **argv)
     if (g_sel < 0)
         g_sel = 0;
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
-        /* Without a controller subsystem we can still run on a keyboard. */
-        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-            fprintf(stderr, "gameswitcher: SDL_Init: %s\n", SDL_GetError());
-            return EXIT_BACK;
+    {
+        int max_attempts = env_int_or("GS_UI_INIT_RETRIES", DEFAULT_INIT_ATTEMPTS);
+        int delay_ms     = env_int_or("GS_UI_INIT_DELAY_MS", DEFAULT_INIT_DELAY_MS);
+        int attempt;
+
+        if (max_attempts < 1)
+            max_attempts = 1;
+
+        for (attempt = 1; attempt <= max_attempts; attempt++) {
+            if (delay_ms > 0)
+                SDL_Delay((Uint32)delay_ms);
+
+            if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
+                /* Without a controller subsystem we can still run on a keyboard. */
+                if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+                    fprintf(stderr, "gameswitcher: SDL_Init attempt %d/%d: %s\n",
+                            attempt, max_attempts, SDL_GetError());
+                    continue;
+                }
+            }
+            apply_button_layout();
+            open_controllers();
+
+            if (SDL_GetCurrentDisplayMode(0, &mode) == 0 && mode.w > 0) {
+                W = mode.w;
+                H = mode.h;
+            }
+            if (forced_w > 0 && forced_h > 0) {
+                W = forced_w;
+                H = forced_h;
+            }
+
+            win = SDL_CreateWindow("Game Switcher", SDL_WINDOWPOS_CENTERED,
+                                   SDL_WINDOWPOS_CENTERED, W, H,
+                                   (forced_w ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP)
+                                   | SDL_WINDOW_SHOWN);
+            if (!win) {
+                fprintf(stderr, "gameswitcher: SDL_CreateWindow attempt %d/%d: %s\n",
+                        attempt, max_attempts, SDL_GetError());
+                SDL_Quit();
+                continue;
+            }
+
+            ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+            if (!ren)
+                ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+            if (!ren) {
+                fprintf(stderr, "gameswitcher: SDL_CreateRenderer attempt %d/%d: %s\n",
+                        attempt, max_attempts, SDL_GetError());
+                SDL_DestroyWindow(win);
+                win = NULL;
+                SDL_Quit();
+                continue;
+            }
+
+            break; /* window + renderer both came up */
         }
     }
-    apply_button_layout();
-    open_controllers();
 
-    if (SDL_GetCurrentDisplayMode(0, &mode) == 0 && mode.w > 0) {
-        W = mode.w;
-        H = mode.h;
-    }
-    if (forced_w > 0 && forced_h > 0) {
-        W = forced_w;
-        H = forced_h;
+    if (!win || !ren) {
+        fprintf(stderr, "gameswitcher: could not start video\n");
+        return EXIT_UI_FAILED;
     }
 
-    win = SDL_CreateWindow("Game Switcher", SDL_WINDOWPOS_CENTERED,
-                           SDL_WINDOWPOS_CENTERED, W, H,
-                           (forced_w ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP)
-                           | SDL_WINDOW_SHOWN);
-    if (!win) {
-        fprintf(stderr, "gameswitcher: SDL_CreateWindow: %s\n", SDL_GetError());
-        SDL_Quit();
-        return EXIT_BACK;
-    }
     SDL_ShowCursor(SDL_DISABLE);
-
-    ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-    if (!ren)
-        ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
-    if (!ren) {
-        fprintf(stderr, "gameswitcher: SDL_CreateRenderer: %s\n", SDL_GetError());
-        SDL_DestroyWindow(win);
-        SDL_Quit();
-        return EXIT_BACK;
-    }
     if (!forced_w)
         SDL_GetRendererOutputSize(ren, &W, &H);
 
@@ -560,7 +612,7 @@ int main(int argc, char **argv)
         SDL_DestroyRenderer(ren);
         SDL_DestroyWindow(win);
         SDL_Quit();
-        return EXIT_BACK;
+        return EXIT_UI_FAILED;
     }
 
     /* Headless render for tests: one frame, straight to a BMP. */

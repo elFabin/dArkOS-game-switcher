@@ -26,12 +26,51 @@ GS_SESSION="${GS_RUN}/gs_session"
 GS_SWITCH="${GS_RUN}/gs_switch"
 GS_CHOICE="${GS_RUN}/gs_choice"
 
-# Defaults; gameswitcher.conf may override any of them.
-GS_MAX_RECENTS=12
-GS_RA_PORT=55355
-GS_SHOW_SPLASH=1
-GS_QUIT_TIMEOUT=10
-GS_SHOT_TIMEOUT=3
+# Defaults, as ${VAR:-default} so an already-exported value (a test harness,
+# or a caller that wants to override one setting for a single invocation)
+# survives sourcing this file; gameswitcher.conf, sourced below, is still the
+# normal way to change any of them for real and wins over both.
+GS_MAX_RECENTS="${GS_MAX_RECENTS:-12}"
+GS_RA_PORT="${GS_RA_PORT:-55355}"
+# Off by default: it re-runs perfmax (a third DRM/KMS client, and on rk3326 a
+# deletion of ~/.asoundrc that only ES's own game-end hook restores) right in
+# the handover window between one game and the next.  See gs-shim.sh.
+GS_SHOW_SPLASH="${GS_SHOW_SPLASH:-0}"
+GS_QUIT_TIMEOUT="${GS_QUIT_TIMEOUT:-10}"
+GS_SHOT_TIMEOUT="${GS_SHOT_TIMEOUT:-5}"
+
+# fn | power | both.  Fn is BTN_TRIGGER_HAPPY5 (evdev 708) on the A10 Mini --
+# confirmed against both es_input.cfg.a10mini (system_hk id="16") and the
+# ogage a10mini branch's own HOTKEY constant.  Blank GS_HOTKEY_DEVICE matches
+# by capability (any device that can emit the code) rather than by name, so a
+# wrong device name only narrows the search instead of breaking it.
+GS_TRIGGER="${GS_TRIGGER:-fn}"
+GS_HOTKEY_CODE="${GS_HOTKEY_CODE:-708}"
+GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
+
+# Changing GS_TRIGGER here takes effect on the next game launch for the Fn
+# watcher (gs-shim.sh starts/stops it live).  The power-button hook is a
+# system file (pause.sh) and is only installed when the trigger requested at
+# install time included "power" -- flip it on by re-running install.sh.
+
+# Freeze EmulationStation (SIGSTOP) for the life of the switch loop and
+# SIGCONT it on every exit path.  Off by default: the diagnosed cause of ES
+# appearing to "take over" is a lost DRM-master race between the switcher and
+# the next game (see gameswitcher.c's init retry), not ES itself running, and
+# a frozen ES looks exactly like a dead device if this ever fails to resume.
+# Try 1 only if GS_SHOW_SPLASH=0 plus the retry logic don't fix it.
+GS_ES_FREEZE="${GS_ES_FREEZE:-0}"
+
+# Log every switch, screenshot attempt and UI start to
+# ~/.config/gameswitcher/gameswitcher.log with timestamps, for diagnosing
+# reports that can't be reproduced here.
+GS_DEBUG="${GS_DEBUG:-0}"
+
+# Exit code gameswitcher.c uses for "the UI could not start at all" (as
+# opposed to 10/back or 11/sleep, which are real user choices).  gs-shim.sh
+# falls back to gs-menu.sh when it sees this, instead of treating it as "the
+# player chose to leave".
+GS_UI_FAILED_RC="${GS_UI_FAILED_RC:-12}"
 
 if [ -r "${GS_CONF}" ]; then
   # shellcheck disable=SC1090
@@ -44,6 +83,12 @@ fi
 
 gs_log() {
   echo "gameswitcher: $*" >&2
+  [ "${GS_DEBUG:-0}" = "1" ] || return 0
+  local logf="${GS_STATE}/gameswitcher.log" line
+  line="$(date '+%Y-%m-%d %H:%M:%S') $*"
+  { mkdir -p "${GS_STATE}" 2>/dev/null && printf '%s\n' "${line}" >> "${logf}" 2>/dev/null; } \
+    || { sudo mkdir -p "${GS_STATE}" 2>/dev/null; printf '%s\n' "${line}" | sudo tee -a "${logf}" >/dev/null 2>&1; }
+  gs_fix_perm "${logf}"
 }
 
 # Files under ${GS_STATE} may be written by root (via pause.sh) or by ark (via
@@ -107,6 +152,53 @@ gs_ra_cmd() {
 
 gs_ra_running() {
   pgrep -x retroarch >/dev/null 2>&1 || pgrep -x retroarch32 >/dev/null 2>&1
+}
+
+# A game's process exiting doesn't necessarily mean its GPU/DRM context has
+# finished tearing down (amiberry/amiberry.sh documents exactly this kind of
+# lag for EmulationStation's own handover).  Give it a brief, bounded window
+# to settle before the switcher contends for the display.
+gs_wait_for_teardown() {
+  local waited=0
+  while gs_ra_running; do
+    [ "${waited}" -ge 20 ] && break
+    sleep 0.1
+    waited=$(( waited + 1 ))
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Optional: freeze EmulationStation for the life of the switch loop
+# (GS_ES_FREEZE=1).  Never `systemctl stop` it: emulationstation.service is
+# Type=simple with the default KillMode=control-group, and our own shim is
+# inside that same cgroup, so stopping the service would kill the switcher.
+# SIGSTOP only pauses scheduling; the process resumes exactly where it left
+# off, and never triggers systemd's Restart=on-failure.
+# ---------------------------------------------------------------------------
+
+gs_es_freeze() {
+  [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
+  pkill -STOP -x emulationstation 2>/dev/null
+}
+
+# Unconditional and safe to call even when nothing is frozen: this is the one
+# call that must never be skipped, so it does not gate on GS_ES_FREEZE.
+gs_es_resume() {
+  pkill -CONT -x emulationstation 2>/dev/null
+}
+
+# A background watchdog that resumes ES if this process disappears without
+# running its own EXIT trap (e.g. SIGKILL, which no trap can catch).
+gs_es_watchdog_start() {
+  [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
+  local watch_pid="$1"
+  (
+    while kill -0 "${watch_pid}" 2>/dev/null; do
+      sleep 2
+    done
+    pkill -CONT -x emulationstation 2>/dev/null
+  ) &
+  disown 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------

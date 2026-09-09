@@ -30,10 +30,24 @@ section() { printf '\n%s\n' "$1"; }
 section "shell syntax"
 # ---------------------------------------------------------------------------
 for f in "${ROOT}"/scripts/* "${ROOT}"/install.sh "${ROOT}"/uninstall.sh; do
-  case "${f}" in *.gptk) continue ;; esac
+  [ -f "${f}" ] || continue
+  case "${f}" in *.gptk|*.py) continue ;; esac
   if bash -n "${f}" 2>/dev/null; then ok "parses $(basename "${f}")"
   else bad "parses $(basename "${f}")"; fi
 done
+
+for f in "${ROOT}"/scripts/*.py; do
+  [ -f "${f}" ] || continue
+  if python3 -m py_compile "${f}" 2>/dev/null; then
+    ok "parses $(basename "${f}")"
+  else
+    bad "parses $(basename "${f}")"
+  fi
+done
+# py_compile always writes bytecode regardless of PYTHONDONTWRITEBYTECODE
+# (that only suppresses the *implicit* caching import does); clean up so the
+# next run's directory-listing loops above don't trip over it.
+rm -rf "${ROOT}"/scripts/__pycache__
 
 if command -v shellcheck >/dev/null 2>&1; then
   for f in "${ROOT}"/scripts/*.sh "${ROOT}"/scripts/pause.sh.gs \
@@ -100,6 +114,11 @@ gs_recents_seed
 is "seeding is a no-op once populated" "$(wc -l < "${GS_RECENTS}")" "1"
 
 # ---------------------------------------------------------------------------
+section "hotkey tap detection"
+# ---------------------------------------------------------------------------
+"${HERE}/hotkey_case.sh" "${ROOT}" && ok "hotkey scenarios" || bad "hotkey scenarios"
+
+# ---------------------------------------------------------------------------
 section "shim switch loop"
 # ---------------------------------------------------------------------------
 "${HERE}/shim_case.sh" "${ROOT}" && ok "shim scenarios" || bad "shim scenarios"
@@ -118,6 +137,10 @@ if [ -x "${ROOT}/gameswitcher" ]; then
   printf 'k1\t100\tretroarch\t/cores/a.so\tsnes\tGame One\t/roms/snes/one.sfc\n' >  "${UI}/recents.tsv"
   printf 'k2\t90\tretroarch32\t/cores/b.so\tgba\tGame Two\t/roms/gba/two.gba\n'  >> "${UI}/recents.tsv"
 
+  # Fast and deterministic: the dummy driver always succeeds on the first
+  # try, so there is nothing to wait out here.
+  export GS_UI_INIT_RETRIES=1 GS_UI_INIT_DELAY_MS=0
+
   SDL_VIDEODRIVER=dummy "${ROOT}/gameswitcher" --state "${UI}" --size 640x480 \
       --dump "${UI}/frame.bmp" --out "${UI}/choice" >/dev/null 2>&1
   rc=$?
@@ -129,6 +152,17 @@ if [ -x "${ROOT}/gameswitcher" ]; then
   SDL_VIDEODRIVER=dummy "${ROOT}/gameswitcher" --state "${UI}-empty" --size 640x480 \
       --dump "${UI}-empty/frame.bmp" >/dev/null 2>&1
   is "empty list exits cleanly" "$?" "10"
+
+  # amiberry/amiberry.sh documents EmulationStation not always having
+  # released DRM master in time; gameswitcher.c retries SDL init the same
+  # way.  A driver that can never come up should still fail distinctly
+  # (EXIT_UI_FAILED), not with the same code as a real "Back" press, so
+  # gs-shim.sh knows to fall back to the text menu instead of leaving to ES.
+  SDL_VIDEODRIVER=this-driver-does-not-exist GS_UI_INIT_RETRIES=2 \
+      "${ROOT}/gameswitcher" --state "${UI}" --size 640x480 >/dev/null 2>&1
+  is "an unusable video driver fails distinctly from 'back'" "$?" "12"
+
+  unset GS_UI_INIT_RETRIES GS_UI_INIT_DELAY_MS
 else
   printf '  skip carousel (binary not built; run make)\n'
 fi

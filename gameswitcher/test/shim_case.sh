@@ -125,7 +125,7 @@ check "and kept as a backup" \
 check "the restarted game was launched" \
       "$(sed -n 2p "${WORK}/launches.log")" "-L /cores/snes9x.so ${WORK}/roms/Three.sfc"
 
-# --- 5. pause.sh only intercepts when a RetroArch game is up ---------------
+# --- 5. pause.sh defers to stock with the default trigger (fn) -------------
 cp "${ROOT}/scripts/pause.sh.gs" "${GS_BIN}/pause.sh"
 cat > "${GS_BIN}/pause.sh.gs-orig" <<'STUB'
 #!/bin/bash
@@ -137,17 +137,146 @@ echo "switcher" > "${WORK}/pause.result"
 STUB
 chmod +x "${GS_BIN}/pause.sh" "${GS_BIN}/pause.sh.gs-orig" "${GS_BIN}/gs-suspend.sh"
 
-rm -f "${GS_RUN}/gs_session"
-"${GS_BIN}/pause.sh"
-check "no game running -> stock pause.sh" "$(cat "${WORK}/pause.result")" "stock"
-
 # pgrep must see a live 'retroarch' for the hook to fire; fake one on PATH.
 STUBBIN="${WORK}/stubbin"
 mkdir -p "${STUBBIN}"
 printf '#!/bin/bash\n[ "$*" = "-x retroarch" ] && exit 0\nexit 1\n' > "${STUBBIN}/pgrep"
 chmod +x "${STUBBIN}/pgrep"
 : > "${GS_RUN}/gs_session"
-PATH="${STUBBIN}:${PATH}" "${GS_BIN}/pause.sh"
-check "game running -> switcher" "$(cat "${WORK}/pause.result")" "switcher"
+
+# GS_TRIGGER defaults to "fn": a power press must stay plain suspend even
+# with a game running and a live session marker, matching "power should go
+# back to plain suspend" from the bug report.
+GS_TRIGGER=fn PATH="${STUBBIN}:${PATH}" "${GS_BIN}/pause.sh"
+check "fn trigger -> power press stays stock, even mid-game" \
+      "$(cat "${WORK}/pause.result")" "stock"
+
+# --- 6. pause.sh intercepts once the power trigger is turned on ------------
+rm -f "${GS_RUN}/gs_session"
+GS_TRIGGER=power "${GS_BIN}/pause.sh"
+check "power trigger, no game running -> stock pause.sh" \
+      "$(cat "${WORK}/pause.result")" "stock"
+
+: > "${GS_RUN}/gs_session"
+GS_TRIGGER=power PATH="${STUBBIN}:${PATH}" "${GS_BIN}/pause.sh"
+check "power trigger, game running -> switcher" \
+      "$(cat "${WORK}/pause.result")" "switcher"
+
+GS_TRIGGER=both PATH="${STUBBIN}:${PATH}" "${GS_BIN}/pause.sh"
+check "both trigger, game running -> switcher too" \
+      "$(cat "${WORK}/pause.result")" "switcher"
+
+# --- 7. the Fn watcher only starts for fn|both, and is always gone after ---
+cat > "${GS_BIN}/gs-hotkeyd.py" <<'STUB'
+#!/bin/bash
+echo $$ > "${WORK}/hotkeyd.pid"
+: > "${WORK}/hotkeyd.started"
+trap 'exit 0' TERM
+while true; do sleep 0.05; done
+STUB
+chmod +x "${GS_BIN}/gs-hotkeyd.py"
+
+reset_case
+rm -f "${WORK}/hotkeyd.started" "${WORK}/hotkeyd.pid"
+printf 'end\n' > "${WORK}/ra.plan"
+: > "${WORK}/ui.plan"
+GS_TRIGGER=fn "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+check "fn trigger starts the Fn watcher" \
+      "$([ -e "${WORK}/hotkeyd.started" ] && echo yes || echo no)" "yes"
+check "the watcher is gone once the shim exits" \
+      "$(kill -0 "$(cat "${WORK}/hotkeyd.pid")" 2>/dev/null && echo alive || echo gone)" "gone"
+
+reset_case
+rm -f "${WORK}/hotkeyd.started" "${WORK}/hotkeyd.pid"
+GS_TRIGGER=power "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+check "power-only trigger never starts the Fn watcher" \
+      "$([ -e "${WORK}/hotkeyd.started" ] && echo yes || echo no)" "no"
+
+# --- 8. a carousel that fails to start falls back to the text menu ---------
+cat > "${GS_BIN}/gs-menu.sh" <<'STUB'
+#!/bin/bash
+n=$(cat "${WORK}/ui.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/ui.turn"
+echo "menu" >> "${WORK}/ui-source.log"
+line=$(sed -n "${n}p" "${WORK}/ui.plan")
+IFS='|' read -r action rom core emulator <<< "${line}"
+case "${action}" in
+  back)  exit 10 ;;
+  sleep) exit 11 ;;
+esac
+{
+  echo "action=${action}"
+  echo "key=$(printf '%s' "${rom}" | sha1sum | cut -c1-16)"
+  echo "emulator=${emulator}"
+  echo "core=${core}"
+  echo "rom=${rom}"
+} > "${GS_RUN}/gs_choice"
+exit 0
+STUB
+chmod +x "${GS_BIN}/gs-menu.sh"
+# The scripted carousel stub already exits 12 for the action "fail".
+sed -i 's/^  back)  exit 10 ;;$/  back)  exit 10 ;;\n  fail)  exit 12 ;;/' "${GS_OPT}/gameswitcher"
+
+reset_case
+rm -f "${WORK}/ui-source.log"
+printf 'switch\nend\n' > "${WORK}/ra.plan"
+printf 'fail\nlaunch|/roms/gba/Two.gba|/cores/mgba.so|retroarch\n' > "${WORK}/ui.plan"
+"${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+check "a failed carousel does not leave the player stranded in ES" \
+      "$(wc -l < "${WORK}/launches.log")" "2"
+check "the text menu served the fallback" \
+      "$(cat "${WORK}/ui-source.log" 2>/dev/null)" "menu"
+
+# --- 9. GS_ES_FREEZE=1 stops and resumes EmulationStation ------------------
+PKILLBIN="${WORK}/pkillbin"
+mkdir -p "${PKILLBIN}"
+cat > "${PKILLBIN}/pkill" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/pkill.log"
+exit 0
+STUB
+chmod +x "${PKILLBIN}/pkill"
+
+reset_case
+rm -f "${WORK}/pkill.log"
+printf 'end\n' > "${WORK}/ra.plan"
+: > "${WORK}/ui.plan"
+GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+check "freeze stops EmulationStation before the game" \
+      "$(grep -c -- '-STOP -x emulationstation' "${WORK}/pkill.log")" "1"
+check "freeze resumes EmulationStation on a normal exit" \
+      "$(grep -c -- '-CONT -x emulationstation' "${WORK}/pkill.log")" "2"
+
+# A SIGKILLed shim skips its own EXIT trap entirely (SIGKILL can't be
+# caught), so the *next* shim invocation is what has to notice and resume
+# EmulationStation -- the "self-heal first" line at the top of gs-shim.sh.
+reset_case
+rm -f "${WORK}/pkill.log"
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+kill -KILL "$PPID"
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Killed.sfc >/dev/null 2>&1
+check "a SIGKILLed shim still froze ES once" \
+      "$(grep -c -- '-STOP -x emulationstation' "${WORK}/pkill.log")" "1"
+
+# Restore the well-behaved stub before the next, ordinary invocation.
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+n=$(cat "${WORK}/ra.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/ra.turn"
+action=$(sed -n "${n}p" "${WORK}/ra.plan")
+[ "${action}" = "switch" ] && : > "${GS_RUN}/gs_switch"
+exit 0
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+printf 'end\n' > "${WORK}/ra.plan"
+rm -f "${WORK}/pkill.log"
+GS_ES_FREEZE=1 PATH="${PKILLBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
+check "the next shim invocation self-heals the stale freeze before anything else" \
+      "$(head -1 "${WORK}/pkill.log")" "-CONT -x emulationstation"
 
 exit "${FAIL}"
