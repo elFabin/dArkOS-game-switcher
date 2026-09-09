@@ -72,6 +72,7 @@ source ./build_sdljoytest.sh
 source ./build_controllertester.sh
 source ./build_drastic.sh
 source ./finishing_touches.sh
+source ./build_gameswitcher.sh
 source ./cleanup_filesystem.sh
 source ./write_rootfs.sh
 source ./clean_mounts.sh
