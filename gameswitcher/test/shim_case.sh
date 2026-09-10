@@ -443,4 +443,45 @@ check "Game Switcher.sh marks ES as already frozen for the emulator it launches"
       "$(cat "${WORK}/env.log" 2>/dev/null)" "GS_ES_FROZEN=1"
 rm -f "${GS_OPT}/gameswitcher"
 
+# Restore the real shim before any further scenario calls "${GS_BIN}/retroarch"
+# expecting gs-shim.sh's actual behavior, not the env-dumping stub above.
+cp "${ROOT}/scripts/gs-shim.sh" "${GS_BIN}/retroarch"
+chmod +x "${GS_BIN}/retroarch"
+
+# --- 14. a failing launch is captured, not indistinguishable from a normal
+# quit.  Round 11's bug report turned out to be RetroArch itself exiting
+# almost immediately with no visibility into why -- gs-shim.sh now logs its
+# exit code, how long it ran, and (when that looks like a failure) its
+# captured output. ------------------------------------------------------
+reset_case
+rm -f "${GS_STATE}/gameswitcher.log"
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+echo "some fatal init error" >&2
+exit 7
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+: > "${WORK}/ui.plan"
+GS_DEBUG=1 "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1
+check "the failing exit code is logged" \
+      "$(grep -c 'orig retroarch exited rc=7' "${GS_STATE}/gameswitcher.log")" "1"
+check "its captured output is logged too" \
+      "$(grep -c 'orig retroarch output:.*some fatal init error' "${GS_STATE}/gameswitcher.log")" "1"
+
+# Restore the well-behaved stub so nothing downstream is affected.
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+n=$(cat "${WORK}/ra.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/ra.turn"
+action=$(sed -n "${n}p" "${WORK}/ra.plan")
+if [ "${action}" = "hang" ]; then
+  sleep 100
+fi
+[ "${action}" = "switch" ] && : > "${GS_RUN}/gs_switch"
+exit 0
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+
 exit "${FAIL}"

@@ -177,12 +177,25 @@ while true; do
   # process and the real RetroArch binary it eventually execs into are
   # indistinguishable by name -- a name-based pkill/pgrep can just as easily
   # match this shim's own PID as the game's.
-  "${orig}" "${args[@]}" &
+  #
+  # Its stdout/stderr are captured (rather than left to inherit whatever
+  # this shim's own were, which for the idle-carousel handoff traces back to
+  # a systemd service's journal, if anywhere) so a launch failure actually
+  # shows up next to the freeze/resume lines in gameswitcher.log instead of
+  # looking identical to "the player quit normally".
+  launch_out="${GS_RUN}/gs_last_launch.log"
+  launch_start=$(date +%s)
+  "${orig}" "${args[@]}" > "${launch_out}" 2>&1 &
   ra_pid=$!
   [ -n "${GS_ROM}" ] && \
     gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
   wait "${ra_pid}"
   rc=$?
+  elapsed=$(( $(date +%s) - launch_start ))
+  gs_log "orig ${emulator} exited rc=${rc} after ${elapsed}s"
+  if [ "${rc}" -ne 0 ] || [ "${elapsed}" -lt 3 ]; then
+    gs_log "orig ${emulator} output: $(tr '\n' ' ' < "${launch_out}" 2>/dev/null)"
+  fi
   gs_session_clear
 
   # No switch was asked for: the player quit normally, hand the screen back
