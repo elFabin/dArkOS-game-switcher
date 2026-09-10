@@ -6,6 +6,7 @@ After=multi-user.target
 Type=simple
 User=ark
 Environment="GS_HOTKEY_ACTION=/opt/system/Game Switcher.sh"
+Environment="TERM=linux"
 ExecStart=/usr/local/bin/gs-hotkeyd.py
 Restart=on-failure
 RestartSec=2
