@@ -40,22 +40,19 @@ GS_QUIT_TIMEOUT="${GS_QUIT_TIMEOUT:-10}"
 GS_SHOT_TIMEOUT="${GS_SHOT_TIMEOUT:-5}"
 
 # fn | power | both.  Fn is BTN_TRIGGER_HAPPY5 (evdev 708) on the A10 Mini --
-# confirmed against both es_input.cfg.a10mini (system_hk id="16") and the
-# ogage a10mini branch's own HOTKEY constant.  Blank GS_HOTKEY_DEVICE matches
-# by capability (any device that can emit the code) rather than by name, so a
-# wrong device name only narrows the search instead of breaking it.
+# Blank GS_HOTKEY_DEVICE matchesby capability (any device that can emit the
+# code) rather than by name, so a wrong device name only narrows the search
+# instead of breaking it.
 GS_TRIGGER="${GS_TRIGGER:-fn}"
 GS_HOTKEY_CODE="${GS_HOTKEY_CODE:-708}"
 GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
-
 # Changing GS_TRIGGER here takes effect on the next game launch for the Fn
 # watcher (gs-shim.sh starts/stops it live).  The power-button hook is a
 # system file (pause.sh) and is only installed when the trigger requested at
 # install time included "power" -- flip it on by re-running install.sh.
 
 # Log every switch, screenshot attempt and UI start to
-# ~/.config/gameswitcher/gameswitcher.log with timestamps, for diagnosing
-# reports that can't be reproduced here.
+# ~/.config/gameswitcher/gameswitcher.log.
 GS_DEBUG="${GS_DEBUG:-0}"
 
 # Exit code gameswitcher.c uses for "the UI could not start at all" (as
@@ -185,18 +182,11 @@ gs_wait_for_teardown() {
 # `emulationstation` binary as a plain foreground child -- no `exec` --  so
 # systemd's tracked MainPID is the WRAPPER, not the real binary.  The wrapper
 # is just sitting in its own `wait()` the whole time; signaling it does
-# nothing to the process that's actually rendering.  (This also rules out
-# `systemctl stop`: the unit's default KillMode=control-group would hit our
-# own shim too, since it shares the same cgroup -- moot now anyway, since
-# `--kill-whom=main` was never the right target either.)
+# nothing to the process that's actually rendering.
 #
 # So resolve the real binary's PID ourselves: ask systemd for the wrapper's
-# PID (an unprivileged, read-only query), then find ITS direct child whose
-# full command line names the binary.  `-f` (full cmdline) rather than an
-# exact comm match sidesteps the same TASK_COMM_LEN issue worked around
-# elsewhere in this file: "emulationstation" is exactly 16 characters, one
-# over the kernel's 15-character /proc/PID/comm limit, so the kernel
-# truncates it to "emulationstatio" and an exact-match lookup can never hit.
+# PID, then find its direct child whose
+# full command line names the binary.
 #
 # SIGSTOP only pauses scheduling; the process resumes exactly where it left
 # off, and never triggers systemd's Restart=on-failure.
