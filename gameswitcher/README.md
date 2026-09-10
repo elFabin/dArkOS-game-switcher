@@ -58,10 +58,16 @@ up first and restored exactly.
 
 ## Controls
 
+Each recent game shows full-screen, native to whatever resolution
+`gs-suspend.sh` captured it at (the device's own display resolution, not a
+fixed low size) — Left/Right swipes straight to the next/previous game's
+screenshot, edge to edge. Title, system, and the button hints sit in a thin
+overlay at the top and bottom rather than eating into the picture.
+
 | Button | Action |
 |---|---|
 | Fn (tap, in game) | Snapshot the game and open the switcher |
-| Left / Right | Move through recent games |
+| Left / Right | Swipe to the next/previous recent game |
 | A | Resume where you left off |
 | X | Start over (the auto savestate is moved aside, not deleted) |
 | Y | Remove from the list |

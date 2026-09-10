@@ -98,9 +98,15 @@ gs_capture_thumb() {
   # by cleanup_filesystem.sh, so the UI links against core SDL2 only.
   # -loglevel error (not quiet) plus capturing output means an actual failure
   # logs ffmpeg's own message instead of a bare, ambiguous exit code.
-  local ff_err rc
+  #
+  # Scaled to the device's own display resolution, not a fixed low size: the
+  # carousel now shows this full-screen (gameswitcher.c fits it to the screen
+  # preserving aspect ratio at draw time), so capturing at native resolution
+  # avoids downscaling then blowing it back up again for display.
+  local ff_err rc size
+  size="$(gs_display_size)"
   ff_err="$("${ffmpeg_bin}" -y -loglevel error -i "${shot}" \
-    -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2" \
+    -vf "scale=${size}:force_original_aspect_ratio=decrease,pad=${size}:(ow-iw)/2:(oh-ih)/2" \
     -pix_fmt bgr24 "${GS_THUMBS}/${GS_S_KEY}.bmp" 2>&1)"
   rc=$?
   rm -f "${shot}" 2>/dev/null

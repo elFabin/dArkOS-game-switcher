@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate src/font.h: a 1bpp 8x16 bitmap atlas for ASCII 32..126.
+"""Generate src/font.h: a 1bpp 12x24 bitmap atlas for ASCII 32..126.
 
 The Game Switcher UI links against core SDL2 only -- SDL2_ttf's headers are
 stripped from the device by cleanup_filesystem.sh -- so glyphs are baked into
@@ -13,9 +13,9 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
-FONT_SIZE = 13
-CELL_W, CELL_H = 8, 16
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+FONT_SIZE = 19
+CELL_W, CELL_H = 12, 24
 FIRST, LAST = 32, 126
 
 
@@ -25,7 +25,7 @@ def render(ch, font):
     draw = ImageDraw.Draw(img)
     # Anchor on the baseline so caps and descenders both stay inside the cell
     # instead of leaving the font's internal leading as dead rows at the top.
-    draw.text((0, 12), ch, font=font, fill=1, anchor="ls")
+    draw.text((0, 18), ch, font=font, fill=1, anchor="ls")
     return img
 
 
@@ -40,7 +40,7 @@ def main():
             bits = 0
             for x in range(CELL_W):
                 if px[x, y]:
-                    bits |= 1 << (7 - x)
+                    bits |= 1 << (CELL_W - 1 - x)
             glyph.append(bits)
         rows.append((code, glyph))
 
@@ -49,11 +49,11 @@ def main():
     out.write("#ifndef GS_FONT_H_INCLUDED\n#define GS_FONT_H_INCLUDED\n\n")
     out.write("#define GS_FONT_W %d\n#define GS_FONT_H %d\n" % (CELL_W, CELL_H))
     out.write("#define GS_FONT_FIRST %d\n#define GS_FONT_LAST %d\n\n" % (FIRST, LAST))
-    out.write("/* One byte per scanline, MSB = leftmost pixel. */\n")
-    out.write("static const unsigned char gs_font[%d][%d] = {\n" % (LAST - FIRST + 1, CELL_H))
+    out.write("/* One uint16 per scanline (CELL_W can exceed 8 bits), MSB = leftmost pixel. */\n")
+    out.write("static const unsigned short gs_font[%d][%d] = {\n" % (LAST - FIRST + 1, CELL_H))
     for code, glyph in rows:
         label = chr(code) if code != 92 else "backslash"
-        body = ", ".join("0x%02x" % b for b in glyph)
+        body = ", ".join("0x%04x" % b for b in glyph)
         out.write("    { %s }, /* '%s' */\n" % (body, label))
     out.write("};\n\n#endif /* GS_FONT_H_INCLUDED */\n")
 

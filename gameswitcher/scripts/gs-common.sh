@@ -144,6 +144,22 @@ gs_system() {
   fi
 }
 
+# The device's actual display resolution, as "WIDTH:HEIGHT" (ffmpeg's own
+# separator, so callers can drop this straight into a -vf filter).
+# /sys/class/graphics/fb0/virtual_size is standard Linux fbdev sysfs,
+# documented as "W,H"; fall back to the A10 Mini's own 640x480 if it's
+# missing or in an unexpected format rather than guessing further.
+gs_display_size() {
+  local raw
+  if [ -r /sys/class/graphics/fb0/virtual_size ]; then
+    raw="$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null)"
+    case "${raw}" in
+      [0-9]*,[0-9]*) printf '%s:%s' "${raw%,*}" "${raw#*,}"; return 0 ;;
+    esac
+  fi
+  printf '640:480'
+}
+
 # ---------------------------------------------------------------------------
 # Talking to a live RetroArch
 # ---------------------------------------------------------------------------

@@ -48,8 +48,10 @@
 #define DEFAULT_INIT_ATTEMPTS    5
 #define DEFAULT_INIT_DELAY_MS  500
 
-#define THUMB_W 320
-#define THUMB_H 240
+/* Thumbnails are no longer assumed to be a fixed capture size -- gs-suspend.sh
+ * now captures at the device's native resolution, and old 320x240 files can
+ * still be sitting in ~/.config/gameswitcher/thumbs from before that change.
+ * Each texture's own size is queried at draw time instead (see fit_rect_in). */
 
 typedef struct {
     char key[32];
@@ -67,8 +69,6 @@ typedef struct { Uint8 r, g, b; } Color;
 
 static const Color COL_BG     = {  20,  22,  28 };
 static const Color COL_PANEL  = {  30,  33,  41 };
-static const Color COL_FRAME  = {  58,  63,  78 };
-static const Color COL_ACCENT = { 110, 168, 254 };
 static const Color COL_TEXT   = { 232, 234, 240 };
 static const Color COL_DIM    = { 139, 144, 160 };
 
@@ -171,9 +171,9 @@ static SDL_Texture *build_font_atlas(SDL_Renderer *ren)
     memset(px, 0, (size_t)surf->h * surf->pitch);
     for (g = 0; g < glyphs; g++) {
         for (y = 0; y < GS_FONT_H; y++) {
-            unsigned char bits = gs_font[g][y];
+            unsigned short bits = gs_font[g][y];
             for (x = 0; x < GS_FONT_W; x++) {
-                if (bits & (1 << (7 - x)))
+                if (bits & (1 << (GS_FONT_W - 1 - x)))
                     px[y * (surf->pitch / 4) + g * GS_FONT_W + x] = 0xFFFFFFFFu;
             }
         }
@@ -254,18 +254,6 @@ static void fill_rect(SDL_Renderer *ren, int x, int y, int w, int h, Color c)
     SDL_RenderFillRect(ren, &r);
 }
 
-static void draw_border(SDL_Renderer *ren, int x, int y, int w, int h,
-                        int thickness, Color c)
-{
-    int i;
-
-    set_color(ren, c, 255);
-    for (i = 0; i < thickness; i++) {
-        SDL_Rect r = { x - i, y - i, w + 2 * i, h + 2 * i };
-        SDL_RenderDrawRect(ren, &r);
-    }
-}
-
 static SDL_Texture *thumb_for(SDL_Renderer *ren, Entry *e)
 {
     char path[MAX_PATH + 64];
@@ -312,35 +300,62 @@ static int battery_percent(void)
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-static void draw_card(SDL_Renderer *ren, SDL_Texture *atlas, Entry *e,
-                      int cx, int cy, int w, int h, int selected)
+/* Scale (tex_w, tex_h) to fit inside (box_w, box_h) preserving aspect ratio,
+ * centered -- the same letterboxing gs-suspend.sh's ffmpeg pad filter already
+ * does at capture time, done again here since a thumbnail's real size is no
+ * longer assumed to match the current display. */
+static void fit_rect_in(int tex_w, int tex_h, int box_x, int box_y,
+                        int box_w, int box_h, SDL_Rect *out)
+{
+    int w, h;
+
+    if (tex_w <= 0 || tex_h <= 0) {
+        *out = (SDL_Rect){ box_x, box_y, box_w, box_h };
+        return;
+    }
+    if (tex_w * box_h > tex_h * box_w) {
+        w = box_w;
+        h = tex_h * box_w / tex_w;
+    } else {
+        h = box_h;
+        w = tex_w * box_h / tex_h;
+    }
+    out->x = box_x + (box_w - w) / 2;
+    out->y = box_y + (box_h - h) / 2;
+    out->w = w;
+    out->h = h;
+}
+
+/* One full-screen "page" of the carousel, horizontally offset by x_off so the
+ * selected game and its immediate neighbours can be drawn side by side during
+ * a swipe (x_off is a multiple of W -- see draw_frame). */
+static void draw_hero(SDL_Renderer *ren, SDL_Texture *atlas, Entry *e,
+                      int x_off, int W, int H)
 {
     SDL_Texture *thumb = thumb_for(ren, e);
-    SDL_Rect dst = { cx - w / 2, cy - h / 2, w, h };
 
-    fill_rect(ren, dst.x, dst.y, dst.w, dst.h, COL_PANEL);
+    fill_rect(ren, x_off, 0, W, H, COL_BG);
 
     if (thumb) {
+        int tw = 0, th = 0;
+        SDL_Rect dst;
+
+        SDL_QueryTexture(thumb, NULL, NULL, &tw, &th);
+        fit_rect_in(tw, th, x_off, 0, W, H, &dst);
         SDL_RenderCopy(ren, thumb, NULL, &dst);
     } else {
-        /* No snapshot yet - this game has been launched but never suspended. */
-        char label[8];
-        int scale = selected ? 3 : 2;
+        /* No snapshot yet - this game has been launched but never suspended.
+         * Full-screen now, so this needs to read clearly as a placeholder
+         * rather than the near-invisible dim-on-dim initials it used to be
+         * as a small card. */
+        char label[12];
 
-        fit_text(label, sizeof(label), e->title, 3);
-        draw_text_centered(ren, atlas, cx, cy - (GS_FONT_H * scale) / 2,
-                           scale, COL_FRAME, label);
-    }
-
-    draw_border(ren, dst.x, dst.y, dst.w, dst.h, selected ? 3 : 1,
-                selected ? COL_ACCENT : COL_FRAME);
-
-    if (!selected) {
-        /* Dim the neighbours so the focused card reads first. */
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        set_color(ren, COL_BG, 130);
-        SDL_RenderFillRect(ren, &dst);
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+        fill_rect(ren, x_off, 0, W, H, COL_PANEL);
+        fit_text(label, sizeof(label), e->title, 8);
+        draw_text_centered(ren, atlas, x_off + W / 2, H / 2 - GS_FONT_H * 3,
+                           3, COL_TEXT, label);
+        draw_text_centered(ren, atlas, x_off + W / 2, H / 2 + GS_FONT_H,
+                           1, COL_DIM, "no preview yet");
     }
 }
 
@@ -349,26 +364,46 @@ static void draw_frame(SDL_Renderer *ren, SDL_Texture *atlas,
 {
     char buf[256];
     char line[320];
-    int header_h = H / 11;
-    int footer_h = H / 13;
-    int card_h   = (int)(H * 0.40);
-    int card_w   = card_h * THUMB_W / THUMB_H;
-    int step     = (int)(card_w * 0.86);
-    int cap_gap  = H / 24;
-    int sub_gap  = H / 60;
-    /* Centre the card and its two caption lines as one block. */
-    int block_h  = card_h + cap_gap + GS_FONT_H * 2 + sub_gap + GS_FONT_H;
-    int cy       = header_h + (H - header_h - footer_h - block_h) / 2 + card_h / 2;
+    int top_h = GS_FONT_H * 2 + H / 40;
+    int gap = H / 100 + 1;
+    /* Built from actual content heights, not a guessed fraction of H: title
+     * (scale 2) + gap + subtitle (scale 1) + gap + controls (scale 1), plus
+     * top/bottom padding, so three lines of the new, bigger font never
+     * overlap regardless of exactly how tall GS_FONT_H ends up being. */
+    int bottom_h = (H / 60 + 1) * 2 + GS_FONT_H * 2 + gap + GS_FONT_H + gap + GS_FONT_H;
     int pct;
-    int i;
     time_t now;
     struct tm tmv;
 
-    fill_rect(ren, 0, 0, W, H, COL_BG);
+    if (g_count == 0) {
+        fill_rect(ren, 0, 0, W, H, COL_BG);
+        draw_text_centered(ren, atlas, W / 2, H / 2 - GS_FONT_H, 2, COL_DIM,
+                           "No recent games yet");
+        draw_text_centered(ren, atlas, W / 2, H / 2 + GS_FONT_H * 2, 1, COL_DIM,
+                           "Play something and it will show up here");
+    } else {
+        int left  = g_sel - 1;
+        int right = g_sel + 1;
 
-    /* Header */
-    fill_rect(ren, 0, 0, W, header_h, COL_PANEL);
-    draw_text(ren, atlas, GS_FONT_W, (header_h - GS_FONT_H * 2) / 2, 2,
+        /* Furthest first, selected page on top -- same convention as before,
+         * just one full-screen "card" per game instead of three small ones. */
+        if (left >= 0)
+            draw_hero(ren, atlas, &g_entries[left],
+                     (int)((-1.0f + anim) * (float)W), W, H);
+        if (right < g_count)
+            draw_hero(ren, atlas, &g_entries[right],
+                     (int)((1.0f + anim) * (float)W), W, H);
+        draw_hero(ren, atlas, &g_entries[g_sel],
+                 (int)(anim * (float)W), W, H);
+    }
+
+    /* Top overlay: title, clock/battery.  Semi-transparent so it reads as an
+     * overlay on the image rather than a strip cut out of it. */
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    set_color(ren, COL_PANEL, 190);
+    SDL_RenderFillRect(ren, &(SDL_Rect){ 0, 0, W, top_h });
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+    draw_text(ren, atlas, GS_FONT_W, (top_h - GS_FONT_H * 2) / 2, 2,
               COL_TEXT, "Game Switcher");
 
     now = time(NULL);
@@ -379,59 +414,36 @@ static void draw_frame(SDL_Renderer *ren, SDL_Texture *atlas,
     else
         snprintf(buf, sizeof(buf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
     draw_text(ren, atlas, W - GS_FONT_W - text_w(buf, 1),
-              (header_h - GS_FONT_H) / 2, 1, COL_DIM, buf);
+              (top_h - GS_FONT_H) / 2, 1, COL_DIM, buf);
+
+    /* Bottom overlay: game title + system/time/position, or just the back
+     * hint on the empty state -- same semi-transparent treatment. */
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    set_color(ren, COL_PANEL, 190);
+    SDL_RenderFillRect(ren, &(SDL_Rect){ 0, H - bottom_h, W, bottom_h });
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 
     if (g_count == 0) {
-        draw_text_centered(ren, atlas, W / 2, H / 2 - GS_FONT_H, 2, COL_DIM,
-                           "No recent games yet");
-        draw_text_centered(ren, atlas, W / 2, H / 2 + GS_FONT_H * 2, 1, COL_DIM,
-                           "Play something and it will show up here");
+        draw_text_centered(ren, atlas, W / 2, H - bottom_h / 2 - GS_FONT_H / 2,
+                           1, COL_DIM, "B  Back to EmulationStation");
     } else {
-        /* Cards, furthest first so the selected one lands on top. */
-        for (i = 3; i >= 1; i--) {
-            int left  = g_sel - i;
-            int right = g_sel + i;
-            float off;
+        int y = H - bottom_h + (H / 60 + 1);
 
-            if (left >= 0) {
-                off = (float)(-i) + anim;
-                draw_card(ren, atlas, &g_entries[left],
-                          W / 2 + (int)(off * step), cy,
-                          (int)(card_w * 0.68f), (int)(card_h * 0.68f), 0);
-            }
-            if (right < g_count) {
-                off = (float)i + anim;
-                draw_card(ren, atlas, &g_entries[right],
-                          W / 2 + (int)(off * step), cy,
-                          (int)(card_w * 0.68f), (int)(card_h * 0.68f), 0);
-            }
-        }
-        draw_card(ren, atlas, &g_entries[g_sel],
-                  W / 2 + (int)(anim * step), cy, card_w, card_h, 1);
-
-        /* Caption */
         fit_text(buf, sizeof(buf), g_entries[g_sel].title,
                  (size_t)(W / (GS_FONT_W * 2)) - 2);
-        draw_text_centered(ren, atlas, W / 2, cy + card_h / 2 + cap_gap, 2,
-                           COL_TEXT, buf);
+        draw_text_centered(ren, atlas, W / 2, y, 2, COL_TEXT, buf);
+        y += GS_FONT_H * 2 + gap;
 
         rel_time(g_entries[g_sel].epoch, buf, sizeof(buf));
         snprintf(line, sizeof(line), "%s  -  %s  -  %d of %d",
                  g_entries[g_sel].system, buf, g_sel + 1, g_count);
-        draw_text_centered(ren, atlas, W / 2,
-                           cy + card_h / 2 + cap_gap + GS_FONT_H * 2 + sub_gap,
-                           1, COL_DIM, line);
-    }
+        draw_text_centered(ren, atlas, W / 2, y, 1, COL_DIM, line);
+        y += GS_FONT_H + gap;
 
-    /* Footer */
-    fill_rect(ren, 0, H - footer_h, W, footer_h, COL_PANEL);
-    if (g_count == 0)
-        snprintf(line, sizeof(line), "B  Back to EmulationStation");
-    else
         snprintf(line, sizeof(line),
-                 "A Resume   X Start over   Y Remove   B Back   Start Sleep");
-    draw_text_centered(ren, atlas, W / 2, H - footer_h + (footer_h - GS_FONT_H) / 2,
-                       1, COL_DIM, line);
+                 "A Resume  X Restart  Y Remove  B Back  Start Sleep");
+        draw_text_centered(ren, atlas, W / 2, y, 1, COL_DIM, line);
+    }
 }
 
 /* ------------------------------------------------------------------ */
