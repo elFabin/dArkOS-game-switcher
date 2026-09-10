@@ -126,8 +126,9 @@ below.
 - **`GS_ES_FREEZE`** (default `0`) — `SIGSTOP` EmulationStation for the life
   of the switch loop and `SIGCONT` it on every exit path, including a crash
   (a background watchdog resumes it even if the shim is killed outright).
-  Off by default. Enable this if EmulationStation visibly appears during
-  switches — see [If EmulationStation still appears to "take
+  Independent hardening for genuine display-handover timing; not needed for
+  EmulationStation visibly appearing during switches, which had a different
+  cause — see [If EmulationStation still appears to "take
   over"](#if-emulationstation-still-appears-to-take-over).
 - **`GS_QUIT_TIMEOUT`**, **`GS_SHOT_TIMEOUT`**, **`GS_MAX_RECENTS`**,
   **`GS_RA_PORT`** — as before.
@@ -143,41 +144,48 @@ whether its watcher is running, and the tail of the debug log.
 
 ## If EmulationStation still appears to "take over"
 
-It really can be running: confirmed on real hardware, via the system journal,
-that EmulationStation's own UI — not a stale frame, not RetroArch — can
-render during the gap between one RetroArch instance quitting and the next
-one finishing its own video-driver startup. EmulationStation's main process
-blocks on the game the whole time, but that's a wrapper script
-(`emulationstation.sh`), not the real `emulationstation` binary underneath
-it — the binary runs as the wrapper's own child, fully live, and nothing
-stops it from grabbing the display if it gets scheduled during that gap.
+This was root-caused on real hardware, and it was never actually
+EmulationStation misbehaving: it was our own force-kill escalation killing
+the switch loop itself.
 
-**`GS_ES_FREEZE=1`** is the fix: it now resolves and signals that real
-binary's PID directly (`gs_es_pid` in `gs-common.sh`), not the wrapper's PID
-that systemd tracks as the service's `MainPID` — a bug in earlier versions
-that made the freeze a complete no-op regardless of the setting. Turn it on;
-`SIGCONT` runs on every exit path including a crash, so it can't be left
-stuck frozen.
+`gs-shim.sh` is installed as the file `/usr/local/bin/retroarch` and
+launched directly by that path (`nice -n -19 /usr/local/bin/retroarch
+...`). The kernel sets a directly-exec'd script's `comm` to its own
+basename, so `gs-shim.sh`'s own process is indistinguishable by name from
+the real RetroArch binary it forks and waits on — both are "retroarch" as
+far as anything matching by name can tell. `gs-suspend.sh` used to check
+for and kill RetroArch by name (`pgrep -x`/`pkill -x retroarch`), which
+meant its "RetroArch didn't quit in time" escalation could just as easily
+kill `gs-shim.sh` itself as the actual game. When that happened,
+`gs-shim.sh` died mid-session — running its cleanup trap (which resumes
+EmulationStation, correctly, for exactly this kind of unexpected exit) and
+leaving nothing to show the carousel. With the switch loop gone, the outer
+command EmulationStation was blocked on simply finished, handing control
+back to it completely normally. That's what looked like EmulationStation
+"taking over": it wasn't a stale frame, a race, or ES doing anything
+wrong — EmulationStation was legitimately regaining control because, as
+far as it could tell from outside, the game had just ended.
 
-Two more things narrow the same gap independently of the freeze, worth
-keeping regardless:
+This is fixed now: `gs-shim.sh` tracks the real game process's own PID
+(written to the session file) and `gs-suspend.sh` checks and kills that
+PID directly, never by name, so it can no longer touch `gs-shim.sh`'s own
+process regardless of what name they happen to share. As a side effect,
+switches that get a clean `QUIT` response should also feel snappier —
+the old name-based check could never actually observe a clean quit (it
+was always seeing `gs-shim.sh` itself as "still running"), so it always
+waited out the full `GS_QUIT_TIMEOUT` before escalating, every switch,
+regardless of the game.
 
-- The carousel's own startup race: `amiberry/amiberry.sh` documents this
-  exact class of bug for AmiBerry's own launch (`EmulationStation hasn't
-  fully released DRM master`), worked around there with a settle delay and
-  retries. The carousel does the same — a brief delay, then up to five
-  attempts at starting SDL — and `GS_SHOW_SPLASH=0` (the default) removes a
-  second DRM client that used to land in the same handover window.
-- The carousel also clears to black and presents that immediately after
-  `SDL_CreateRenderer` succeeds, before doing anything else (building the
-  font atlas, starting the event loop) — the earliest point it can push a
-  pixel at all, in case a stale frame is part of what's visible alongside
-  EmulationStation.
+`GS_ES_FREEZE` and the carousel's black-frame-first startup (see
+`gameswitcher.c`) are both still in place as independent hardening for
+genuine display-handover timing, but neither was the actual cause here.
 
-If it still happens with `GS_ES_FREEZE=1` on, set `GS_DEBUG=1` and reproduce
-it; `gameswitcher.log`'s SDL error lines will say whether a carousel startup
-retry actually failed, and `ps aux | grep emulationstation` while it's
-happening will confirm whether the freeze reached the right process.
+If it still happens after this fix, set `GS_DEBUG=1` and reproduce it;
+`gameswitcher.log` will show `gs_es_resume`/`gs_es_freeze` firing (or not)
+and `ps -eo pid,ppid,stat,cmd | grep -i emulationstation` (use `cmd`, not
+`comm` — the latter truncates "emulationstation" to 15 characters and
+won't match a plain grep for the full name) will show the real process
+tree at the moment it happens.
 
 ## Scope
 
@@ -246,9 +254,12 @@ this round:
    (A=resume, B=back, X=start over, Y=remove) — this was inverted before;
    the fix couldn't be tested off-device, so this is the one to watch most
    closely.
-3. Set `GS_ES_FREEZE=1` and switch between games — EmulationStation should
-   no longer appear during the gap (the freeze is now confirmed to reach the
-   real ES binary, not just its wrapper script).
+3. Switch between games a few times, including at least one where you leave
+   a game idling long enough that it might not respond to `QUIT`
+   instantly — EmulationStation should no longer appear during the gap
+   (root cause was gs-suspend.sh's force-kill escalation killing the switch
+   loop's own process; fixed by tracking the real game's PID directly), and
+   a clean quit should now feel noticeably faster than before.
 4. Pick a second game; go back to the first — it should resume where you left.
 5. "Back to EmulationStation" should return to a responsive ES, not a restart.
 6. Quit a game normally (Select+Start) — should behave exactly as before.

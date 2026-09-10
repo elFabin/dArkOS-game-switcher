@@ -157,11 +157,23 @@ while true; do
   gs_parse_args "${args[@]}"
   if [ -n "${GS_ROM}" ]; then
     gs_recents_add "${emulator}" "${GS_CORE}" "${GS_ROM}"
-    gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")"
   fi
 
   rm -f "${GS_SWITCH}" 2>/dev/null
-  "${orig}" "${args[@]}"
+  # Backgrounded (not a plain foreground call) so we can capture its own PID
+  # and track it precisely -- gs-suspend.sh needs to signal exactly this
+  # process, never anything matched by name.  "orig" is our copy of the
+  # stock wrapper, itself a script with the same basename ("retroarch" or
+  # "retroarch32") as this shim: the kernel sets a directly-exec'd script's
+  # comm to its own basename (confirmed directly, not assumed), so this
+  # process and the real RetroArch binary it eventually execs into are
+  # indistinguishable by name -- a name-based pkill/pgrep can just as easily
+  # match this shim's own PID as the game's.
+  "${orig}" "${args[@]}" &
+  ra_pid=$!
+  [ -n "${GS_ROM}" ] && \
+    gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
+  wait "${ra_pid}"
   rc=$?
   gs_session_clear
 

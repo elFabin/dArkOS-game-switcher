@@ -16,7 +16,14 @@
 [ -e "${GS_SWITCH}" ] && exit 0
 
 gs_session_read || exit 1
-gs_ra_running || exit 1
+# Check the tracked PID directly rather than gs_ra_running: gs-shim.sh
+# itself is a script installed as /usr/local/bin/retroarch and launched
+# directly by path, and the kernel sets a directly-exec'd script's comm to
+# its own basename -- so gs-shim.sh's own process is indistinguishable from
+# the real RetroArch binary by name.  gs_ra_running's name-based pgrep
+# would therefore always see gs-shim.sh itself as "RetroArch running",
+# whether or not the actual game process is still alive.
+kill -0 "${GS_S_PID}" 2>/dev/null || exit 1
 
 gs_init_dirs
 
@@ -117,18 +124,23 @@ gs_ra_cmd QUIT
 gs_ra_cmd QUIT
 
 waited=0
-while gs_ra_running; do
+while kill -0 "${GS_S_PID}" 2>/dev/null; do
   [ "${waited}" -ge "$(( GS_QUIT_TIMEOUT * 10 ))" ] && break
   sleep 0.1
   waited=$(( waited + 1 ))
 done
 
 # It ignored us.  Take the game down anyway - but only after the grace period
-# above, so a slow autosave on a big core is never cut short.
-if gs_ra_running; then
-  gs_log "RetroArch did not quit in ${GS_QUIT_TIMEOUT}s, terminating"
-  pkill -x retroarch 2>/dev/null
-  pkill -x retroarch32 2>/dev/null
+# above, so a slow autosave on a big core is never cut short.  Kill the
+# tracked PID directly, never by name: gs-shim.sh shares the exact same
+# comm as the real RetroArch binary (see the comment above), so a
+# name-based pkill here would kill gs-shim.sh's own process too, ending the
+# whole switch session and handing control back to EmulationStation as an
+# unintended side effect (confirmed on real hardware -- this was the actual
+# cause of "EmulationStation flickering" during a switch).
+if kill -0 "${GS_S_PID}" 2>/dev/null; then
+  gs_log "RetroArch did not quit in ${GS_QUIT_TIMEOUT}s, terminating pid ${GS_S_PID}"
+  kill -TERM "${GS_S_PID}" 2>/dev/null
 fi
 
 exit 0

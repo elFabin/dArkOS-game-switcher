@@ -262,12 +262,13 @@ gs_es_watchdog_start() {
 # ---------------------------------------------------------------------------
 
 gs_session_write() {
-  local emulator="$1" core="$2" rom="$3" key="$4"
+  local emulator="$1" core="$2" rom="$3" key="$4" pid="$5"
   {
     printf 'GS_S_EMULATOR=%s\n' "${emulator}"
     printf 'GS_S_CORE=%s\n' "${core}"
     printf 'GS_S_ROM=%s\n' "${rom}"
     printf 'GS_S_KEY=%s\n' "${key}"
+    printf 'GS_S_PID=%s\n' "${pid}"
   } > "${GS_SESSION}" 2>/dev/null
   gs_fix_perm "${GS_SESSION}"
 }
@@ -278,7 +279,7 @@ gs_session_clear() {
 
 gs_session_read() {
   [ -r "${GS_SESSION}" ] || return 1
-  GS_S_EMULATOR=""; GS_S_CORE=""; GS_S_ROM=""; GS_S_KEY=""
+  GS_S_EMULATOR=""; GS_S_CORE=""; GS_S_ROM=""; GS_S_KEY=""; GS_S_PID=""
   # Only well-formed GS_S_* assignments are honoured; the file is ours, but
   # sourcing something writable by anyone would be careless.
   local name value
@@ -288,6 +289,7 @@ gs_session_read() {
       GS_S_CORE)     GS_S_CORE="${value}" ;;
       GS_S_ROM)      GS_S_ROM="${value}" ;;
       GS_S_KEY)      GS_S_KEY="${value}" ;;
+      GS_S_PID)      GS_S_PID="${value}" ;;
     esac
   done < "${GS_SESSION}"
   [ -n "${GS_S_ROM}" ]

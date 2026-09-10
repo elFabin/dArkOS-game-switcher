@@ -31,13 +31,19 @@ export GS_SHOW_SPLASH=0
 mkdir -p "${GS_HOME}" "${GS_STATE}" "${GS_OPT}/orig" "${GS_BIN}" "${GS_RUN}"
 
 # A RetroArch that logs how it was invoked and, when the scenario says so,
-# leaves the switch marker behind the way gs-suspend.sh would.
+# leaves the switch marker behind the way gs-suspend.sh would.  "hang" never
+# returns on its own (ignoring the QUIT sent over the network) -- used to
+# exercise gs-suspend.sh's own force-kill escalation for real, rather than
+# the stubbed gs-suspend.sh the other scenarios use.
 cat > "${GS_OPT}/orig/retroarch" <<'STUB'
 #!/bin/bash
 echo "$*" >> "${WORK}/launches.log"
 n=$(cat "${WORK}/ra.turn" 2>/dev/null || echo 1)
 echo $(( n + 1 )) > "${WORK}/ra.turn"
 action=$(sed -n "${n}p" "${WORK}/ra.plan")
+if [ "${action}" = "hang" ]; then
+  sleep 100
+fi
 [ "${action}" = "switch" ] && : > "${GS_RUN}/gs_switch"
 exit 0
 STUB
@@ -310,5 +316,63 @@ rm -f "${WORK}/sudo.log"
 GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
 check "the next shim invocation self-heals the stale freeze before anything else" \
       "$(head -1 "${WORK}/sudo.log")" "kill -CONT 5001"
+
+# --- 10. gs-suspend.sh's own escalation must never kill gs-shim.sh itself --
+# gs-shim.sh is installed as a file literally named "retroarch" and directly
+# exec'd by path, so the kernel gives its process the same comm as the real
+# RetroArch binary it forks (confirmed empirically, not assumed -- a script
+# exec'd this way is not distinguishable from its target by name).  A
+# name-based pkill/pgrep in gs-suspend.sh could therefore match either
+# process.  This runs the REAL gs-suspend.sh (every other scenario stubs it
+# out) against a "game" that never quits on its own, to prove the
+# escalation kills only the tracked PID (GS_S_PID in the session file) and
+# never gs-shim.sh's own process.
+reset_case
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+n=$(cat "${WORK}/ra.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/ra.turn"
+action=$(sed -n "${n}p" "${WORK}/ra.plan")
+if [ "${action}" = "hang" ]; then
+  sleep 100
+fi
+[ "${action}" = "switch" ] && : > "${GS_RUN}/gs_switch"
+exit 0
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+
+printf 'hang\nend\n' > "${WORK}/ra.plan"
+printf 'launch|/roms/gba/Two.gba|/cores/mgba.so|retroarch\n' > "${WORK}/ui.plan"
+
+"${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1 &
+shim_pid=$!
+
+waited=0
+while [ ! -s "${GS_RUN}/gs_session" ]; do
+  [ "${waited}" -ge 50 ] && break
+  sleep 0.1
+  waited=$(( waited + 1 ))
+done
+real_pid="$(grep '^GS_S_PID=' "${GS_RUN}/gs_session" 2>/dev/null | cut -d= -f2)"
+
+check "the session file recorded the real game's PID" \
+      "$([ -n "${real_pid}" ] && echo yes || echo no)" "yes"
+check "the tracked PID is actually alive before quitting" \
+      "$(kill -0 "${real_pid}" 2>/dev/null && echo alive || echo gone)" "alive"
+
+GS_QUIT_TIMEOUT=1 GS_SHOT_TIMEOUT=1 GS_RA_PORT=55355 \
+  "${ROOT}/scripts/gs-suspend.sh" >/dev/null 2>&1
+
+check "the hung game is actually terminated" \
+      "$(kill -0 "${real_pid}" 2>/dev/null && echo alive || echo gone)" "gone"
+check "gs-shim.sh's own process survives the escalation" \
+      "$(kill -0 "${shim_pid}" 2>/dev/null && echo alive || echo gone)" "alive"
+
+wait "${shim_pid}" 2>/dev/null
+check "the switch continued into the next game rather than aborting the session" \
+      "$(wc -l < "${WORK}/launches.log")" "2"
+check "the second launch used the picked game" \
+      "$(tail -1 "${WORK}/launches.log")" "-L /cores/mgba.so /roms/gba/Two.gba"
 
 exit "${FAIL}"
