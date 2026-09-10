@@ -184,18 +184,41 @@ while true; do
   # shows up next to the freeze/resume lines in gameswitcher.log instead of
   # looking identical to "the player quit normally".
   launch_out="${GS_RUN}/gs_last_launch.log"
-  launch_start=$(date +%s)
-  "${orig}" "${args[@]}" > "${launch_out}" 2>&1 &
-  ra_pid=$!
-  [ -n "${GS_ROM}" ] && \
-    gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
-  wait "${ra_pid}"
-  rc=$?
-  elapsed=$(( $(date +%s) - launch_start ))
-  gs_log "orig ${emulator} exited rc=${rc} after ${elapsed}s"
-  if [ "${rc}" -ne 0 ] || [ "${elapsed}" -lt 3 ]; then
-    gs_log "orig ${emulator} output: $(tr '\n' ' ' < "${launch_out}" 2>/dev/null)"
-  fi
+  attempt=1
+  while :; do
+    launch_start=$(date +%s)
+    "${orig}" "${args[@]}" > "${launch_out}" 2>&1 &
+    ra_pid=$!
+    [ -n "${GS_ROM}" ] && \
+      gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
+    wait "${ra_pid}"
+    rc=$?
+    elapsed=$(( $(date +%s) - launch_start ))
+    gs_log "orig ${emulator} exited rc=${rc} after ${elapsed}s (attempt ${attempt})"
+    if [ "${rc}" -ne 0 ] || [ "${elapsed}" -lt 3 ]; then
+      gs_log "orig ${emulator} output: $(tr '\n' ' ' < "${launch_out}" 2>/dev/null)"
+    fi
+    # A fault signal (SIGILL/SIGABRT/SIGBUS/SIGFPE/SIGSEGV -- never
+    # SIGTERM/SIGKILL, which is gs-suspend.sh's own deliberate escalation,
+    # see scenario 10) landing within a couple of seconds of launch matches
+    # RetroArch's own DRM/RGA init colliding with a display EmulationStation
+    # hadn't fully let go of yet -- confirmed on the idle-Fn path via a
+    # kernel-side `vop_crtc_enable` modeset landing right at crash time.
+    # SIGSTOP pauses ES's scheduling, not its DRM master/GL context, so this
+    # is a one-time snapshot of whatever ES was doing when it got frozen,
+    # not a persistent condition -- retry once before giving up.
+    case "${rc}" in
+      132|134|135|136|139)
+        if [ "${elapsed}" -lt 5 ] && [ "${attempt}" -lt 2 ]; then
+          attempt=$(( attempt + 1 ))
+          gs_log "orig ${emulator} crashed right at launch, retrying once (attempt ${attempt})"
+          sleep 1
+          continue
+        fi
+        ;;
+    esac
+    break
+  done
   gs_session_clear
 
   # No switch was asked for: the player quit normally, hand the screen back

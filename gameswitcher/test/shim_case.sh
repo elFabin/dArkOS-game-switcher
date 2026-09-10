@@ -484,4 +484,67 @@ exit 0
 STUB
 chmod +x "${GS_OPT}/orig/retroarch"
 
+# --- 15. a launch-time crash is retried once, and a second attempt that
+# succeeds lets the game actually run.  Confirmed on-device: RetroArch
+# segfaults (SIGSEGV) right at launch when reached via the idle-Fn path,
+# with a kernel-side DRM modeset (vop_crtc_enable) landing at the exact
+# same moment -- a one-time collision with EmulationStation's still-held
+# display state, not a persistent condition, so a second attempt should
+# find a clean device. -------------------------------------------------
+reset_case
+rm -f "${GS_STATE}/gameswitcher.log" "${WORK}/crash.turn"
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+n=$(cat "${WORK}/crash.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/crash.turn"
+if [ "${n}" = "1" ]; then
+  kill -SEGV $$
+fi
+exit 0
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+: > "${WORK}/ui.plan"
+GS_DEBUG=1 "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1
+check "a launch-time crash is retried" \
+      "$(grep -c 'crashed right at launch, retrying' "${GS_STATE}/gameswitcher.log")" "1"
+check "the game actually launched on the second attempt" \
+      "$(wc -l < "${WORK}/launches.log")" "2"
+check "the retried launch's own clean exit is logged with the right attempt number" \
+      "$(grep -c 'exited rc=0 after.*(attempt 2)' "${GS_STATE}/gameswitcher.log")" "1"
+
+# --- 16. a launch that keeps crashing gives up after exactly one retry --
+# rather than looping forever if it's not a one-time collision after all.
+reset_case
+rm -f "${GS_STATE}/gameswitcher.log"
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+kill -SEGV $$
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+: > "${WORK}/ui.plan"
+GS_DEBUG=1 "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1
+check "a persistently crashing launch is attempted exactly twice" \
+      "$(wc -l < "${WORK}/launches.log")" "2"
+check "it gives up after the one retry rather than looping forever" \
+      "$(grep -c 'retrying once' "${GS_STATE}/gameswitcher.log")" "1"
+check "the second crash is still logged with its own attempt number" \
+      "$(grep -c 'exited rc=139 after.*(attempt 2)' "${GS_STATE}/gameswitcher.log")" "1"
+
+# Restore the well-behaved stub so the tree is left in a known state.
+cat > "${GS_OPT}/orig/retroarch" <<'STUB'
+#!/bin/bash
+echo "$*" >> "${WORK}/launches.log"
+n=$(cat "${WORK}/ra.turn" 2>/dev/null || echo 1)
+echo $(( n + 1 )) > "${WORK}/ra.turn"
+action=$(sed -n "${n}p" "${WORK}/ra.plan")
+if [ "${action}" = "hang" ]; then
+  sleep 100
+fi
+[ "${action}" = "switch" ] && : > "${GS_RUN}/gs_switch"
+exit 0
+STUB
+chmod +x "${GS_OPT}/orig/retroarch"
+
 exit "${FAIL}"
