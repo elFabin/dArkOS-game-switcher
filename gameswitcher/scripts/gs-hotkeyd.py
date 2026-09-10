@@ -132,7 +132,7 @@ def learn(name_filter):
                 for event in dev.read():
                     if event.type == ecodes.EV_KEY and event.value == 1:
                         print(f"GS_HOTKEY_CODE={event.code}")
-                        print(f"GS_HOTKEY_DEVICE={dev.name}")
+                        print(f"GS_HOTKEY_DEVICE=\"{dev.name}\"")
                         return 0
             except OSError:
                 del devices[fd]
