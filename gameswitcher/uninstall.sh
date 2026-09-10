@@ -30,6 +30,7 @@ SYSMENU="${ROOT}/opt/system"
 SYSADV="${SYSMENU}/Advanced"
 STATE="${ROOT}${GS_HOME}/.config/gameswitcher"
 CFGBACKUP="${STATE}/retroarch-cfg.backup"
+IDLE_UNIT="${ROOT}/etc/systemd/system/gs-hotkeyd-idle.service"
 
 say() { printf '%s\n' "$*"; }
 
@@ -89,6 +90,11 @@ fi
 
 restore_cfg
 
+if [ -e "${IDLE_UNIT}" ]; then
+  [ -z "${ROOT}" ] && ${SUDO} systemctl disable --now gs-hotkeyd-idle >/dev/null 2>&1
+  ${SUDO} rm -f "${IDLE_UNIT}"
+  [ -z "${ROOT}" ] && ${SUDO} systemctl daemon-reload
+fi
 ${SUDO} pkill -f gs-hotkeyd.py 2>/dev/null
 
 ${SUDO} rm -f "${BIN}/gs-common.sh" "${BIN}/gs-suspend.sh" "${BIN}/gs-menu.sh" \

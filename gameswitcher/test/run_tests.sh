@@ -114,6 +114,41 @@ gs_recents_seed
 is "seeding is a no-op once populated" "$(wc -l < "${GS_RECENTS}")" "1"
 
 # ---------------------------------------------------------------------------
+section "foreign emulator detection"
+# ---------------------------------------------------------------------------
+# gs_foreign_emulator_running matches by full cmdline (pgrep -f), not the
+# real binary -- `exec -a NAME cmd` fakes a process's argv[0]/cmdline
+# without needing the actual emulator present, exactly like round 7's own
+# TASK_COMM_LEN fix relies on -f over an exact comm match.
+is "nothing running yet" "$(gs_foreign_emulator_running && echo yes || echo no)" "no"
+
+bash -c 'exec -a /opt/drastic/bin/drastic sleep 5' &
+fake_pid=$!
+waited=0
+while [ "${waited}" -lt 30 ] && ! gs_foreign_emulator_running; do
+  sleep 0.1
+  waited=$(( waited + 1 ))
+done
+is "detects a known standalone emulator by path" \
+   "$(gs_foreign_emulator_running && echo yes || echo no)" "yes"
+
+kill "${fake_pid}" 2>/dev/null
+wait "${fake_pid}" 2>/dev/null
+waited=0
+while [ "${waited}" -lt 30 ] && gs_foreign_emulator_running; do
+  sleep 0.1
+  waited=$(( waited + 1 ))
+done
+is "no longer detected once it exits" "$(gs_foreign_emulator_running && echo yes || echo no)" "no"
+
+bash -c 'exec -a /opt/not-a-known-emulator/thing sleep 0.3' &
+fake_pid=$!
+sleep 0.1
+is "an unrelated process is not mistaken for one" \
+   "$(gs_foreign_emulator_running && echo yes || echo no)" "no"
+wait "${fake_pid}" 2>/dev/null
+
+# ---------------------------------------------------------------------------
 section "hotkey tap detection"
 # ---------------------------------------------------------------------------
 "${HERE}/hotkey_case.sh" "${ROOT}" && ok "hotkey scenarios" || bad "hotkey scenarios"

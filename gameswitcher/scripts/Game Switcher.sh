@@ -11,6 +11,18 @@
 # shellcheck disable=SC1090
 . "${GS_COMMON:-/usr/local/bin/gs-common.sh}"
 
+# Reachable two ways now: the Options menu entry (always safe -- ES's menu
+# isn't reachable while a game or standalone emulator has the screen anyway)
+# and a system-wide Fn tap via gs-hotkeyd-idle.service, which fires blindly
+# on every clean tap regardless of what's currently running.  Bail before
+# touching the display if a RetroArch session is already active (the
+# in-game watcher owns that case -- see gs-suspend.sh) or a standalone
+# emulator has the screen (gs_foreign_emulator_running).
+if gs_session_read && kill -0 "${GS_S_PID}" 2>/dev/null; then
+  exit 0
+fi
+gs_foreign_emulator_running && exit 0
+
 gs_init_dirs
 gs_recents_seed
 

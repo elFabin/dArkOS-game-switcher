@@ -160,6 +160,26 @@ gs_display_size() {
   printf '640:480'
 }
 
+# Is one of dArkOS's own standalone emulators (outside our RetroArch-only
+# scope, and with no hook into their lifecycle) currently running?  Modeled
+# on OnionUI/Onion's own system_state_update(): an explicit, hardcoded list
+# of known binaries is the same approach it uses to solve this identical
+# problem -- there is no generic trick to detect "something else has the
+# screen" beyond checking the finite set of programs you actually know
+# about.  Matched by full path via `pgrep -f`, not an exact comm name, to
+# avoid the TASK_COMM_LEN collision class of bug fixed in gs-suspend.sh.
+gs_foreign_emulator_running() {
+  local bin
+  for bin in /opt/drastic/bin/drastic \
+             /opt/ppsspp/PPSSPPSDL /opt/ppsspp-2021/PPSSPPSDL \
+             /opt/dolphin/dolphin-emu-nogui \
+             /opt/flycastsa/flycast \
+             /opt/bigpemu/bigpemu; do
+    pgrep -f "${bin}" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Talking to a live RetroArch
 # ---------------------------------------------------------------------------

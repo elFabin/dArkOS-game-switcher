@@ -1,0 +1,14 @@
+[Unit]
+Description=dArkOS Game Switcher - idle Fn watcher
+After=multi-user.target
+
+[Service]
+Type=simple
+User=ark
+Environment="GS_HOTKEY_ACTION=/opt/system/Game Switcher.sh"
+ExecStart=/usr/local/bin/gs-hotkeyd.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
