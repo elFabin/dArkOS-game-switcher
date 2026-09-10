@@ -3,30 +3,10 @@
 gs-hotkeyd.py - fires an action on a clean tap of the Game Switcher hotkey
 (the Fn / system_hk button) while a game is running.
 
-Modeled on global/auto_suspend.py's device-scanning shape (same
-select.select()-over-fds idiom, same "never grab, just observe" rule from its
-comment: a grabbed device would stop the game itself from seeing input) and
-on hotkeydaemon/killer_daemon.py's evdev-by-device shape.
-
-Differences from killer_daemon.py, deliberately:
-  - matches by which device reports the target keycode in its capabilities,
-    not a fixed device-name table, so a wrong GS_HOTKEY_DEVICE only narrows
-    the search rather than breaking detection outright
-  - fires on a clean tap only: key down, then up, with no other key pressed
-    in between and under TapDetector.tap_max seconds.  This is what lets
-    every ogage combo that also uses this button (Fn+D-pad brightness,
-    Fn+Volume, Fn+Power shutdown) keep working untouched -- we only ever act
-    on the presses that were a tap and nothing else.
-  - keeps running for the life of the game, firing on every clean tap, rather
-    than exiting after the first one.
-
 The tap/combo/long-press state machine is TapDetector, kept free of any
-evdev or select() dependency so it can be unit-tested directly (there is no
-/dev/uinput in most CI sandboxes to synthesize real input events with) --
-see test/hotkey_case.sh.
+evdev or select() dependency so it can be unit-tested directly.
 
-Started and stopped by gs-shim.sh around each emulator launch, the same way
-ppsspp/ppsspp.sh starts and stops watchpsp.sh.
+Started and stopped by gs-shim.sh around each emulator launch.
 
     gs-hotkeyd.py                          # watch, using env vars / defaults
     gs-hotkeyd.py --learn                  # report the next button pressed
@@ -41,9 +21,7 @@ import time
 
 from evdev import InputDevice, ecodes, list_devices
 
-# BTN_TRIGGER_HAPPY5 -- the A10 Mini's Fn / system_hk button, confirmed
-# against both es_input.cfg.a10mini (system_hk id="16") and the ogage
-# a10mini branch's HOTKEY constant.
+# BTN_TRIGGER_HAPPY5 -- the A10 Mini's Fn / system_hk button.
 DEFAULT_CODE = 708
 
 TAP_MAX_SECONDS = 0.6
@@ -77,17 +55,18 @@ class TapDetector:
     def feed(self, code, value, now):
         if code == self.target_code:
             if value == 1:
+                # Got the key down; start timing.
                 self._pressed_at = now
                 self._spoiled = False
             elif value == 0 and self._pressed_at is not None:
+                # Got the key up; decide if it was a clean tap.
                 held = now - self._pressed_at
                 self._pressed_at = None
                 if (not self._spoiled and held < self.tap_max
                         and now - self._last_fire > self.cooldown):
+                    # Clean tap!  Fire the action and start the cooldown.
                     self._last_fire = now
                     return True
-            # value == 2 (autorepeat) on the target code itself: still held,
-            # nothing to decide yet.
         elif value == 1 and self._pressed_at is not None:
             # Some other button went down while the hotkey was held: this is
             # a combo (ogage's job), not a tap (ours).
