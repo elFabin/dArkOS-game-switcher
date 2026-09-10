@@ -29,7 +29,6 @@ else
   echo "retroarch:      NOT installed"
 fi
 echo "GS_TRIGGER:     ${GS_TRIGGER}"
-echo "GS_ES_FREEZE:   ${GS_ES_FREEZE}"
 echo "GS_SHOW_SPLASH: ${GS_SHOW_SPLASH}"
 if grep -q 'gs-suspend' "${GS_BIN}/pause.sh" 2>/dev/null; then
   echo "pause.sh:       hooked (power trigger active)"

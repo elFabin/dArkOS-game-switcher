@@ -53,19 +53,6 @@ GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
 # system file (pause.sh) and is only installed when the trigger requested at
 # install time included "power" -- flip it on by re-running install.sh.
 
-# Freeze EmulationStation (SIGSTOP) for the life of the switch loop and
-# SIGCONT it on every exit path.  Off by default.  Confirmed on real hardware
-# that EmulationStation's own UI (not a stale frame, not RetroArch) can
-# genuinely render during the gap between one RetroArch instance quitting and
-# the next one finishing its own video-driver init -- ES's real binary is
-# never actually blocked from drawing, it's just usually not scheduled in
-# time to. `gs_es_pid` (below) resolves that real binary's PID itself rather
-# than trusting systemd's tracked MainPID for the service, which is actually
-# the passive wrapper script, not the binary -- see the comment above
-# `gs_es_pid` for why. Enable this if EmulationStation visibly appears during
-# switches.
-GS_ES_FREEZE="${GS_ES_FREEZE:-0}"
-
 # Log every switch, screenshot attempt and UI start to
 # ~/.config/gameswitcher/gameswitcher.log with timestamps, for diagnosing
 # reports that can't be reproduced here.
@@ -209,8 +196,12 @@ gs_wait_for_teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Optional: freeze EmulationStation for the life of the switch loop
-# (GS_ES_FREEZE=1).  Never `systemctl stop`/`kill --kill-whom=main` it:
+# Freeze EmulationStation for the life of the switch loop (gs-shim.sh) or the
+# idle carousel (Game Switcher.sh), and resume it on every exit path.  Always
+# on: mid-game, ES's real binary can still grab the display in the gap
+# between one RetroArch instance quitting and the next starting; idle in ES,
+# nothing else stops ES's own event loop from rendering while the carousel
+# is also up.  Never `systemctl stop`/`kill --kill-whom=main` it:
 # `emulationstation.service` is `Type=simple` with
 # `ExecStart=.../emulationstation.sh`, a bash wrapper that launches the real
 # `emulationstation` binary as a plain foreground child -- no `exec` --  so
@@ -249,46 +240,37 @@ gs_es_pid() {
   printf '%s' "${pid}"
 }
 
-gs_es_freeze() {
-  [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
-  local pid; pid="$(gs_es_pid)"
+# Shared by freeze/resume/watchdog: resolve the real binary's PID and send it
+# one signal, logging either way.
+gs_es_signal() {
+  local sig="$1" pid
+  pid="$(gs_es_pid)"
   if [ -z "${pid}" ]; then
-    gs_log "gs_es_freeze: no PID resolved, not sending STOP"
+    gs_log "gs_es_signal: no PID resolved, not sending ${sig}"
     return 0
   fi
-  gs_log "gs_es_freeze: sending STOP to ${pid}"
-  sudo kill -STOP "${pid}" 2>/dev/null
+  gs_log "gs_es_signal: sending ${sig} to ${pid}"
+  sudo kill "-${sig}" "${pid}" 2>/dev/null
 }
 
-# Unconditional and safe to call even when nothing is frozen: this is the one
-# call that must never be skipped, so it does not gate on GS_ES_FREEZE.
+gs_es_freeze() {
+  gs_es_signal STOP
+}
+
 gs_es_resume() {
-  local pid; pid="$(gs_es_pid)"
-  if [ -z "${pid}" ]; then
-    gs_log "gs_es_resume: no PID resolved, not sending CONT"
-    return 0
-  fi
-  gs_log "gs_es_resume: sending CONT to ${pid}"
-  sudo kill -CONT "${pid}" 2>/dev/null
+  gs_es_signal CONT
 }
 
 # A background watchdog that resumes ES if this process disappears without
 # running its own EXIT trap (e.g. SIGKILL, which no trap can catch).
 gs_es_watchdog_start() {
-  [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
   local watch_pid="$1"
   (
     while kill -0 "${watch_pid}" 2>/dev/null; do
       sleep 2
     done
     gs_log "gs_es_watchdog: watched pid ${watch_pid} is gone, resuming ES"
-    local pid; pid="$(gs_es_pid)"
-    if [ -z "${pid}" ]; then
-      gs_log "gs_es_watchdog: no PID resolved, not sending CONT"
-    else
-      gs_log "gs_es_watchdog: sending CONT to ${pid}"
-      sudo kill -CONT "${pid}" 2>/dev/null
-    fi
+    gs_es_signal CONT
   ) &
   disown 2>/dev/null
 }

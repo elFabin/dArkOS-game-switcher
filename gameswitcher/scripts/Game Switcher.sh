@@ -26,6 +26,16 @@ gs_foreign_emulator_running && exit 0
 gs_init_dirs
 gs_recents_seed
 
+# Unlike the mid-game invocation (gs-shim.sh replaces retroarch, so ES is
+# structurally guaranteed to be blocked in its own system() call), ES is
+# genuinely alive and rendering its own menu when this script is reached
+# idle -- nothing stops it from continuing to draw while the carousel also
+# tries to.  Same self-heal/freeze/trap/watchdog sequence gs-shim.sh uses.
+gs_es_resume
+gs_es_freeze
+trap 'gs_es_resume' EXIT
+gs_es_watchdog_start "$$"
+
 run_ui() {
   rm -f "${GS_CHOICE}" 2>/dev/null
   if [ -x "${GS_OPT}/gameswitcher" ]; then

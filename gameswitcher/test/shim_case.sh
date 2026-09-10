@@ -233,8 +233,9 @@ check "a failed carousel does not leave the player stranded in ES" \
 check "the text menu served the fallback" \
       "$(cat "${WORK}/ui-source.log" 2>/dev/null)" "menu"
 
-# --- 9. GS_ES_FREEZE=1 stops and resumes the real EmulationStation binary --
-# gs_es_pid resolves the real binary's PID itself rather than trusting
+# --- 9. gs-shim.sh always stops and resumes the real EmulationStation binary
+# (freezing ES is unconditional now, no setting to turn it on).  gs_es_pid
+# resolves the real binary's PID itself rather than trusting
 # systemd's MainPID for the service (which is actually the passive wrapper
 # script, emulationstation.sh -- see the comment above gs_es_pid), then
 # gs_es_freeze/resume signal that PID directly via `sudo kill`.  So this
@@ -279,7 +280,7 @@ reset_case
 rm -f "${WORK}/sudo.log"
 printf 'end\n' > "${WORK}/ra.plan"
 : > "${WORK}/ui.plan"
-GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
 check "freeze stops the real EmulationStation binary, not its wrapper" \
       "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "1"
 check "freeze resumes the real EmulationStation binary on a normal exit" \
@@ -296,7 +297,7 @@ echo "$*" >> "${WORK}/launches.log"
 kill -KILL "$PPID"
 STUB
 chmod +x "${GS_OPT}/orig/retroarch"
-GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Killed.sfc >/dev/null 2>&1
+PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Killed.sfc >/dev/null 2>&1
 check "a SIGKILLed shim still froze the real ES binary once" \
       "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "1"
 
@@ -313,7 +314,7 @@ STUB
 chmod +x "${GS_OPT}/orig/retroarch"
 printf 'end\n' > "${WORK}/ra.plan"
 rm -f "${WORK}/sudo.log"
-GS_ES_FREEZE=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
+PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/Two.sfc >/dev/null 2>&1
 check "the next shim invocation self-heals the stale freeze before anything else" \
       "$(head -1 "${WORK}/sudo.log")" "kill -CONT 5001"
 
@@ -374,5 +375,27 @@ check "the switch continued into the next game rather than aborting the session"
       "$(wc -l < "${WORK}/launches.log")" "2"
 check "the second launch used the picked game" \
       "$(tail -1 "${WORK}/launches.log")" "-L /cores/mgba.so /roms/gba/Two.gba"
+
+# --- 11. Game Switcher.sh freezes ES unconditionally too, no setting needed -
+# Unlike gs-shim.sh's mid-game invocation, ES is genuinely alive and
+# rendering when Game Switcher.sh is reached idle -- nothing else stops it
+# from contending with the carousel for the display, so this must always
+# freeze it, not just when some setting says to.  Runs the REAL
+# Game Switcher.sh (stubbing the carousel binary to return straight to
+# EmulationStation, reusing the systemctl/pgrep/sudo stubs from scenario 9).
+reset_case
+rm -f "${WORK}/sudo.log" "${GS_RUN}/gs_session"
+cat > "${GS_OPT}/gameswitcher" <<'STUB'
+#!/bin/bash
+exit 10
+STUB
+chmod +x "${GS_OPT}/gameswitcher"
+
+PATH="${SUDOBIN}:${PATH}" "${ROOT}/scripts/Game Switcher.sh" >/dev/null 2>&1
+check "Game Switcher.sh freezes the real ES binary with no setting involved" \
+      "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "1"
+check "Game Switcher.sh resumes it again on exit" \
+      "$(grep -c -- 'kill -CONT 5001' "${WORK}/sudo.log")" "2"
+rm -f "${GS_OPT}/gameswitcher"
 
 exit "${FAIL}"

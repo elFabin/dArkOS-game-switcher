@@ -14,8 +14,8 @@
 # `basename "$0"` to serve both retroarch and retroarch32.
 #
 # Also runs the Fn-tap watcher (gs-hotkeyd.py) for the life of the loop when
-# GS_TRIGGER includes "fn", and optionally freezes EmulationStation
-# (GS_ES_FREEZE=1) for the same span -- see gs-common.sh for both.
+# GS_TRIGGER includes "fn", and freezes EmulationStation for the same span --
+# see gs-common.sh for both.
 #############################################################################
 
 # shellcheck disable=SC1090

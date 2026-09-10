@@ -11,7 +11,7 @@
 OUT="$(/usr/local/bin/gs-doctor.sh 2>&1)"
 
 summary="$(printf '%s\n' "${OUT}" | grep -E \
-  '^(retroarch|GS_TRIGGER|GS_ES_FREEZE|pause\.sh|ffmpeg|nc|python3|carousel|watcher):')"
+  '^(retroarch|GS_TRIGGER|pause\.sh|ffmpeg|nc|python3|carousel|watcher):')"
 
 msgbox "$(printf '%s\n\nFor the full report, SSH in and run:\n  gs-doctor.sh' "${summary}")" \
   "Game Switcher"

@@ -145,13 +145,6 @@ below.
   (`image-viewer`) landing right in the handover between one game and the
   next, plus a `~/.asoundrc` deletion on rk3326 that only EmulationStation's
   own game-end hook restores.
-- **`GS_ES_FREEZE`** (default `0`) — `SIGSTOP` EmulationStation for the life
-  of the switch loop and `SIGCONT` it on every exit path, including a crash
-  (a background watchdog resumes it even if the shim is killed outright).
-  Independent hardening for genuine display-handover timing; not needed for
-  EmulationStation visibly appearing during switches, which had a different
-  cause — see [If EmulationStation still appears to "take
-  over"](#if-emulationstation-still-appears-to-take-over).
 - **`GS_QUIT_TIMEOUT`**, **`GS_SHOT_TIMEOUT`**, **`GS_MAX_RECENTS`**,
   **`GS_RA_PORT`** — as before.
 - **`GS_DEBUG`** (default `0`) — log switches, screenshot attempts, UI starts
@@ -198,9 +191,18 @@ was always seeing `gs-shim.sh` itself as "still running"), so it always
 waited out the full `GS_QUIT_TIMEOUT` before escalating, every switch,
 regardless of the game.
 
-`GS_ES_FREEZE` and the carousel's black-frame-first startup (see
-`gameswitcher.c`) are both still in place as independent hardening for
-genuine display-handover timing, but neither was the actual cause here.
+EmulationStation is also frozen (`SIGSTOP`) unconditionally for the life of
+the carousel, resumed on every exit path including a crash, both mid-game
+(`gs-shim.sh`) and when opened idle from ES itself (`Game Switcher.sh`,
+including the [system-wide Fn shortcut](#controls)) — there's no setting
+for this, it's always on. It wasn't the actual cause of the mid-game
+symptom above (ES's real process is never the one doing the rendering
+there, freeze or not), but it's not optional either: opened idle, ES is
+genuinely alive and rendering its own menu the whole time, with nothing
+else to stop it from contending with the carousel for the display, so the
+freeze is what actually keeps ES off-screen in that case. The carousel's
+black-frame-first startup (see `gameswitcher.c`) is separate, independent
+hardening for genuine display-handover timing.
 
 If it still happens after this fix, set `GS_DEBUG=1` and reproduce it;
 `gameswitcher.log` will show `gs_es_resume`/`gs_es_freeze` firing (or not)
@@ -294,8 +296,12 @@ this round:
 9. Power press inside DraStic still suspends — no regression for standalones.
 10. `./uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.
 11. Tap Fn while idle in EmulationStation's own menus (not in a game) — the
-    carousel should open directly, same as `Options > Game Switcher`. New
-    this round, entirely untested on real hardware: `systemctl status
-    gs-hotkeyd-idle` to confirm it's actually running first if it doesn't.
+    carousel should open directly, same as `Options > Game Switcher`, and
+    EmulationStation itself should stay hidden the whole time rather than
+    visibly rendering behind/through the carousel (it was still doing so
+    until this round — ES is genuinely alive and drawing when idle, unlike
+    mid-game, so it needs the freeze to actually stay off-screen). If it
+    still doesn't, `systemctl status gs-hotkeyd-idle` to confirm the
+    watcher is actually running.
 12. Tap Fn while DraStic (or PPSSPP/Dolphin/Flycast/BigPEmu) is running —
     should do nothing, not pop the carousel up over it.
