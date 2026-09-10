@@ -72,7 +72,8 @@ else
     echo "${ff_out}" | sed 's/^/          /'
     case "${ff_out}" in
       *"error while loading shared libraries: libvulkan.so"*)
-        echo "          fix: sudo apt-get install -y libvulkan1"
+        echo "          fix: ssh in and do 'sudo apt install -y libvulkan1'"
+        echo "          (or 'sudo apt install --reinstall libvulkan1' if it's already installed but broken somehow)"
         echo "          (a known dArkOS build gap on rk3326 -- cleanup_filesystem.sh's"
         echo "          apt autoremove reaps libvulkan1 after removing the libvulkan-dev"
         echo "          build dependency; rk3566 has its own repair step, rk3326 doesn't)"
@@ -94,7 +95,7 @@ if [ -x "${GS_OPT}/gameswitcher" ]; then
     echo "carousel: present but did not respond as expected -- see below"
   fi
 else
-  echo "carousel: not built (falling back to the text menu; not an error)"
+  echo "carousel: not built (falling back to the text menu)"
 fi
 echo
 
@@ -121,9 +122,16 @@ else
 fi
 echo
 
-echo "-- Recent log (${GS_STATE}/gameswitcher.log) --"
-if [ -r "${GS_STATE}/gameswitcher.log" ]; then
-  tail -n 20 "${GS_STATE}/gameswitcher.log"
+if [ -n "${GS_DEBUG}" ]; then
+  echo "-- Debug log --"
+  echo "GS_DEBUG=1 is set in gameswitcher.conf, so debug logging is enabled."
+  echo "-- Recent log (${GS_STATE}/gameswitcher.log) --"
+  if [ -r "${GS_STATE}/gameswitcher.log" ]; then
+    tail -n 20 "${GS_STATE}/gameswitcher.log"
+  else
+    echo "(no log yet -- set GS_DEBUG=1 in gameswitcher.conf to start one)"
+  fi
 else
-  echo "(no log yet -- set GS_DEBUG=1 in gameswitcher.conf to start one)"
+  echo "-- Debug log --"
+  echo "GS_DEBUG=1 is NOT set in gameswitcher.conf, so debug logging is disabled."
 fi
