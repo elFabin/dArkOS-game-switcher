@@ -54,18 +54,16 @@ GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
 # install time included "power" -- flip it on by re-running install.sh.
 
 # Freeze EmulationStation (SIGSTOP) for the life of the switch loop and
-# SIGCONT it on every exit path.  Off by default, and this will NOT fix ES
-# appearing to "take over": for the whole time a game runs, ES's main process
-# is blocked deep in its own wait-for-child call, so it is not scheduled to
-# draw anything a signal could interrupt.  What's actually visible during the
-# handover gap is almost always a stale DRM/KMS frame -- the last thing
-# flipped to the display persists until something presents a new one -- which
-# is what gameswitcher.c's black-frame-first draw and init retry address
-# instead (see its comments, and amiberry.sh for the same class of bug on
-# this device).  SIGSTOP does still suspend every thread in the ES process
-# though, not just its blocked main one, so this can still be worth enabling
-# if ES has independent background activity you want to pause (its own
-# screensaver timer is the likely candidate) -- just not for this symptom.
+# SIGCONT it on every exit path.  Off by default.  Confirmed on real hardware
+# that EmulationStation's own UI (not a stale frame, not RetroArch) can
+# genuinely render during the gap between one RetroArch instance quitting and
+# the next one finishing its own video-driver init -- ES's real binary is
+# never actually blocked from drawing, it's just usually not scheduled in
+# time to. `gs_es_pid` (below) resolves that real binary's PID itself rather
+# than trusting systemd's tracked MainPID for the service, which is actually
+# the passive wrapper script, not the binary -- see the comment above
+# `gs_es_pid` for why. Enable this if EmulationStation visibly appears during
+# switches.
 GS_ES_FREEZE="${GS_ES_FREEZE:-0}"
 
 # Log every switch, screenshot attempt and UI start to
@@ -176,37 +174,47 @@ gs_wait_for_teardown() {
 
 # ---------------------------------------------------------------------------
 # Optional: freeze EmulationStation for the life of the switch loop
-# (GS_ES_FREEZE=1).  Never `systemctl stop` it: emulationstation.service is
-# Type=simple with the default KillMode=control-group, and our own shim is
-# inside that same cgroup, so stopping the service would kill the switcher.
+# (GS_ES_FREEZE=1).  Never `systemctl stop`/`kill --kill-whom=main` it:
+# `emulationstation.service` is `Type=simple` with
+# `ExecStart=.../emulationstation.sh`, a bash wrapper that launches the real
+# `emulationstation` binary as a plain foreground child -- no `exec` --  so
+# systemd's tracked MainPID is the WRAPPER, not the real binary.  The wrapper
+# is just sitting in its own `wait()` the whole time; signaling it does
+# nothing to the process that's actually rendering.  (This also rules out
+# `systemctl stop`: the unit's default KillMode=control-group would hit our
+# own shim too, since it shares the same cgroup -- moot now anyway, since
+# `--kill-whom=main` was never the right target either.)
 #
-# Signal it via `systemctl kill --kill-whom=main`, not `pkill -x`: the real
-# binary name is "emulationstation", exactly 16 characters -- one over the
-# kernel's 15-character /proc/PID/comm limit (TASK_COMM_LEN=16 including the
-# NUL) -- so the kernel truncates the running process's comm to
-# "emulationstatio" and an exact-match `pkill -x emulationstation` can never
-# match it (confirmed: it's a silent no-op, not a real freeze).  This is also
-# why every other ES lifecycle touch point in dArkOS uses systemctl rather
-# than a comm-name signal.  `--kill-whom=main` targets exactly the unit's
-# tracked MainPID (the ES binary itself, never our own process tree sharing
-# its cgroup), sidestepping comm-name matching entirely.  `sudo` is required
-# (this is a system-instance unit) and is free here: `ark ALL=NOPASSWD: ALL`
-# per utils.sh's setup_ark_user(), the same rule every other `sudo systemctl
-# suspend` / `sudo perfmax` call in this codebase already relies on.
+# So resolve the real binary's PID ourselves: ask systemd for the wrapper's
+# PID (an unprivileged, read-only query), then find ITS direct child whose
+# full command line names the binary.  `-f` (full cmdline) rather than an
+# exact comm match sidesteps the same TASK_COMM_LEN issue worked around
+# elsewhere in this file: "emulationstation" is exactly 16 characters, one
+# over the kernel's 15-character /proc/PID/comm limit, so the kernel
+# truncates it to "emulationstatio" and an exact-match lookup can never hit.
 #
 # SIGSTOP only pauses scheduling; the process resumes exactly where it left
 # off, and never triggers systemd's Restart=on-failure.
 # ---------------------------------------------------------------------------
 
+gs_es_pid() {
+  local wrapper_pid
+  wrapper_pid="$(systemctl show -p MainPID --value emulationstation.service 2>/dev/null)"
+  [ -n "${wrapper_pid}" ] && [ "${wrapper_pid}" != "0" ] || return 1
+  pgrep -P "${wrapper_pid}" -f emulationstation 2>/dev/null | head -1
+}
+
 gs_es_freeze() {
   [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
-  sudo systemctl kill --kill-whom=main --signal=STOP emulationstation.service 2>/dev/null
+  local pid; pid="$(gs_es_pid)"
+  [ -n "${pid}" ] && sudo kill -STOP "${pid}" 2>/dev/null
 }
 
 # Unconditional and safe to call even when nothing is frozen: this is the one
 # call that must never be skipped, so it does not gate on GS_ES_FREEZE.
 gs_es_resume() {
-  sudo systemctl kill --kill-whom=main --signal=CONT emulationstation.service 2>/dev/null
+  local pid; pid="$(gs_es_pid)"
+  [ -n "${pid}" ] && sudo kill -CONT "${pid}" 2>/dev/null
 }
 
 # A background watchdog that resumes ES if this process disappears without
@@ -218,7 +226,8 @@ gs_es_watchdog_start() {
     while kill -0 "${watch_pid}" 2>/dev/null; do
       sleep 2
     done
-    sudo systemctl kill --kill-whom=main --signal=CONT emulationstation.service 2>/dev/null
+    local pid; pid="$(gs_es_pid)"
+    [ -n "${pid}" ] && sudo kill -CONT "${pid}" 2>/dev/null
   ) &
   disown 2>/dev/null
 }

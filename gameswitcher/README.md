@@ -126,12 +126,9 @@ below.
 - **`GS_ES_FREEZE`** (default `0`) — `SIGSTOP` EmulationStation for the life
   of the switch loop and `SIGCONT` it on every exit path, including a crash
   (a background watchdog resumes it even if the shim is killed outright).
-  This does **not** fix EmulationStation appearing to "take over" — see
-  [If EmulationStation still appears to "take
-  over"](#if-emulationstation-still-appears-to-take-over) for why, and for
-  the actual fix. It can still be worth enabling if ES has independent
-  background activity (its own screensaver timer, most likely) you want
-  paused during a game.
+  Off by default. Enable this if EmulationStation visibly appears during
+  switches — see [If EmulationStation still appears to "take
+  over"](#if-emulationstation-still-appears-to-take-over).
 - **`GS_QUIT_TIMEOUT`**, **`GS_SHOT_TIMEOUT`**, **`GS_MAX_RECENTS`**,
   **`GS_RA_PORT`** — as before.
 - **`GS_DEBUG`** (default `0`) — log switches, screenshot attempts, UI starts
@@ -146,16 +143,24 @@ whether its watcher is running, and the tail of the debug log.
 
 ## If EmulationStation still appears to "take over"
 
-It isn't actually running: for the whole time a game is up, EmulationStation
-is blocked deep inside its own wait-for-child call and isn't scheduled to
-draw anything. What's on screen is a stale DRM/KMS frame — whatever was last
-flipped to the display stays there until something presents a new one, so
-the gap between one program giving up the display and the next one's first
-real frame shows leftover pixels from whichever ran before. `GS_ES_FREEZE`
-can't touch this: `SIGSTOP`ing a process that was never drawing changes
-nothing visible.
+It really can be running: confirmed on real hardware, via the system journal,
+that EmulationStation's own UI — not a stale frame, not RetroArch — can
+render during the gap between one RetroArch instance quitting and the next
+one finishing its own video-driver startup. EmulationStation's main process
+blocks on the game the whole time, but that's a wrapper script
+(`emulationstation.sh`), not the real `emulationstation` binary underneath
+it — the binary runs as the wrapper's own child, fully live, and nothing
+stops it from grabbing the display if it gets scheduled during that gap.
 
-Two things narrow this gap:
+**`GS_ES_FREEZE=1`** is the fix: it now resolves and signals that real
+binary's PID directly (`gs_es_pid` in `gs-common.sh`), not the wrapper's PID
+that systemd tracks as the service's `MainPID` — a bug in earlier versions
+that made the freeze a complete no-op regardless of the setting. Turn it on;
+`SIGCONT` runs on every exit path including a crash, so it can't be left
+stuck frozen.
+
+Two more things narrow the same gap independently of the freeze, worth
+keeping regardless:
 
 - The carousel's own startup race: `amiberry/amiberry.sh` documents this
   exact class of bug for AmiBerry's own launch (`EmulationStation hasn't
@@ -163,18 +168,16 @@ Two things narrow this gap:
   retries. The carousel does the same — a brief delay, then up to five
   attempts at starting SDL — and `GS_SHOW_SPLASH=0` (the default) removes a
   second DRM client that used to land in the same handover window.
-- The narrower gap between successfully acquiring the display and actually
-  presenting a frame: the carousel now clears to black and presents that
-  immediately after `SDL_CreateRenderer` succeeds, before doing anything
-  else (building the font atlas, starting the event loop). That's the
-  earliest point it can push a pixel at all, so it's the real fix for the
-  stale-frame symptom — a clean cut to black reads as "switching," not as
-  EmulationStation still being up.
+- The carousel also clears to black and presents that immediately after
+  `SDL_CreateRenderer` succeeds, before doing anything else (building the
+  font atlas, starting the event loop) — the earliest point it can push a
+  pixel at all, in case a stale frame is part of what's visible alongside
+  EmulationStation.
 
-If it still happens after that, set `GS_DEBUG=1` and reproduce it;
-`gameswitcher.log`'s SDL error lines will say whether a startup retry
-attempt actually failed, which would point at the first case above rather
-than the frame-timing one.
+If it still happens with `GS_ES_FREEZE=1` on, set `GS_DEBUG=1` and reproduce
+it; `gameswitcher.log`'s SDL error lines will say whether a carousel startup
+retry actually failed, and `ps aux | grep emulationstation` while it's
+happening will confirm whether the freeze reached the right process.
 
 ## Scope
 
@@ -243,9 +246,9 @@ this round:
    (A=resume, B=back, X=start over, Y=remove) — this was inverted before;
    the fix couldn't be tested off-device, so this is the one to watch most
    closely.
-3. Switch between games — the black-cut fix (not `GS_ES_FREEZE`, which
-   doesn't affect this) should mean EmulationStation no longer appears to
-   flash up in the gap.
+3. Set `GS_ES_FREEZE=1` and switch between games — EmulationStation should
+   no longer appear during the gap (the freeze is now confirmed to reach the
+   real ES binary, not just its wrapper script).
 4. Pick a second game; go back to the first — it should resume where you left.
 5. "Back to EmulationStation" should return to a responsive ES, not a restart.
 6. Quit a game normally (Select+Start) — should behave exactly as before.
