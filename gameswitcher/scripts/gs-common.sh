@@ -198,23 +198,42 @@ gs_wait_for_teardown() {
 # ---------------------------------------------------------------------------
 
 gs_es_pid() {
-  local wrapper_pid
+  local wrapper_pid pid
   wrapper_pid="$(systemctl show -p MainPID --value emulationstation.service 2>/dev/null)"
-  [ -n "${wrapper_pid}" ] && [ "${wrapper_pid}" != "0" ] || return 1
-  pgrep -P "${wrapper_pid}" -f emulationstation 2>/dev/null | head -1
+  if [ -z "${wrapper_pid}" ] || [ "${wrapper_pid}" = "0" ]; then
+    gs_log "gs_es_pid: could not resolve emulationstation.service's MainPID"
+    return 1
+  fi
+  pid="$(pgrep -P "${wrapper_pid}" -f emulationstation 2>/dev/null | head -1)"
+  if [ -z "${pid}" ]; then
+    gs_log "gs_es_pid: wrapper is ${wrapper_pid}, but it has no matching child"
+    return 1
+  fi
+  gs_log "gs_es_pid: wrapper=${wrapper_pid} real=${pid}"
+  printf '%s' "${pid}"
 }
 
 gs_es_freeze() {
   [ "${GS_ES_FREEZE:-0}" = "1" ] || return 0
   local pid; pid="$(gs_es_pid)"
-  [ -n "${pid}" ] && sudo kill -STOP "${pid}" 2>/dev/null
+  if [ -z "${pid}" ]; then
+    gs_log "gs_es_freeze: no PID resolved, not sending STOP"
+    return 0
+  fi
+  gs_log "gs_es_freeze: sending STOP to ${pid}"
+  sudo kill -STOP "${pid}" 2>/dev/null
 }
 
 # Unconditional and safe to call even when nothing is frozen: this is the one
 # call that must never be skipped, so it does not gate on GS_ES_FREEZE.
 gs_es_resume() {
   local pid; pid="$(gs_es_pid)"
-  [ -n "${pid}" ] && sudo kill -CONT "${pid}" 2>/dev/null
+  if [ -z "${pid}" ]; then
+    gs_log "gs_es_resume: no PID resolved, not sending CONT"
+    return 0
+  fi
+  gs_log "gs_es_resume: sending CONT to ${pid}"
+  sudo kill -CONT "${pid}" 2>/dev/null
 }
 
 # A background watchdog that resumes ES if this process disappears without
@@ -226,8 +245,14 @@ gs_es_watchdog_start() {
     while kill -0 "${watch_pid}" 2>/dev/null; do
       sleep 2
     done
+    gs_log "gs_es_watchdog: watched pid ${watch_pid} is gone, resuming ES"
     local pid; pid="$(gs_es_pid)"
-    [ -n "${pid}" ] && sudo kill -CONT "${pid}" 2>/dev/null
+    if [ -z "${pid}" ]; then
+      gs_log "gs_es_watchdog: no PID resolved, not sending CONT"
+    else
+      gs_log "gs_es_watchdog: sending CONT to ${pid}"
+      sudo kill -CONT "${pid}" 2>/dev/null
+    fi
   ) &
   disown 2>/dev/null
 }
