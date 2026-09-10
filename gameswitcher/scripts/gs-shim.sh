@@ -141,12 +141,20 @@ fi
 
 # Self-heal first: a prior run that was killed outright (SIGKILL bypasses any
 # trap) may have left EmulationStation frozen.  Always start from a known
-# state before possibly freezing it again ourselves.
-gs_es_resume
-
+# state before possibly freezing it again ourselves -- unless our caller
+# already did both for this exact handoff (GS_ES_FROZEN=1, set by Game
+# Switcher.sh when it launches the emulator straight from the idle
+# carousel).  Redoing it here would resume then immediately re-freeze ES
+# right as the new game is trying to take the screen, a window it can lose
+# -- control goes back to ES instead of the game actually starting.
 trap 'gs_session_clear; gs_es_resume; gs_hotkeyd_stop' EXIT
 
-gs_es_freeze
+if [ "${GS_ES_FROZEN:-0}" = "1" ]; then
+  gs_log "gs-shim: ES already frozen by our caller, not re-freezing"
+else
+  gs_es_resume
+  gs_es_freeze
+fi
 gs_es_watchdog_start "$$"
 gs_hotkeyd_start
 

@@ -398,4 +398,49 @@ check "Game Switcher.sh resumes it again on exit" \
       "$(grep -c -- 'kill -CONT 5001' "${WORK}/sudo.log")" "2"
 rm -f "${GS_OPT}/gameswitcher"
 
+# --- 12. GS_ES_FROZEN=1 stops gs-shim.sh from re-freezing ES itself --------
+# Game Switcher.sh already froze ES before handing off to the emulator; if
+# gs-shim.sh redid its own self-heal (CONT) + freeze (STOP) here too, that
+# resume-then-refreeze blip would land right as the new game is trying to
+# take the screen. GS_ES_FROZEN=1 (set by Game Switcher.sh -- see scenario
+# 13) must skip both, leaving only the unconditional exit-trap CONT.
+reset_case
+rm -f "${WORK}/sudo.log"
+printf 'end\n' > "${WORK}/ra.plan"
+: > "${WORK}/ui.plan"
+GS_ES_FROZEN=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
+check "GS_ES_FROZEN=1 skips the shim's own freeze" \
+      "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "0"
+check "GS_ES_FROZEN=1 skips the shim's own self-heal resume too" \
+      "$(grep -c -- 'kill -CONT 5001' "${WORK}/sudo.log")" "1"
+
+# --- 13. Game Switcher.sh marks ES as already frozen for the emulator it
+# launches, so the handoff above actually happens on the device. -----------
+reset_case
+rm -f "${WORK}/sudo.log" "${GS_RUN}/gs_session" "${WORK}/env.log"
+cat > "${GS_OPT}/gameswitcher" <<'STUB'
+#!/bin/bash
+{
+  echo "action=launch"
+  echo "key=deadbeef"
+  echo "emulator=retroarch"
+  echo "core=/cores/snes9x.so"
+  echo "rom=/roms/snes/One.sfc"
+} > "${GS_RUN}/gs_choice"
+exit 0
+STUB
+chmod +x "${GS_OPT}/gameswitcher"
+
+cat > "${GS_BIN}/retroarch" <<'STUB'
+#!/bin/bash
+echo "GS_ES_FROZEN=${GS_ES_FROZEN:-unset}" >> "${WORK}/env.log"
+exit 0
+STUB
+chmod +x "${GS_BIN}/retroarch"
+
+PATH="${SUDOBIN}:${PATH}" "${ROOT}/scripts/Game Switcher.sh" >/dev/null 2>&1
+check "Game Switcher.sh marks ES as already frozen for the emulator it launches" \
+      "$(cat "${WORK}/env.log" 2>/dev/null)" "GS_ES_FROZEN=1"
+rm -f "${GS_OPT}/gameswitcher"
+
 exit "${FAIL}"

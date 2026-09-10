@@ -87,7 +87,10 @@ while true; do
   [ -n "${governor}" ] && [ -x /usr/local/bin/perfmax ] && \
     sudo /usr/local/bin/perfmax "${governor}" "${GS_C_ROM}" >/dev/null 2>&1
 
-  SDL_VIDEO_EGL_DRIVER="libEGL.so" nice -n -19 \
+  # GS_ES_FROZEN=1 tells the shim we already froze ES ourselves above, so it
+  # skips its own self-heal/freeze -- otherwise that resume-then-refreeze
+  # blip lands right as the game is trying to take the screen.  See gs-shim.sh.
+  GS_ES_FROZEN=1 SDL_VIDEO_EGL_DRIVER="libEGL.so" nice -n -19 \
     "${GS_BIN}/${emulator}" -L "${GS_C_CORE}" "${GS_C_ROM}"
 
   [ -x /usr/local/bin/perfnorm ] && sudo /usr/local/bin/perfnorm >/dev/null 2>&1
