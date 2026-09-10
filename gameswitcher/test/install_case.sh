@@ -83,8 +83,6 @@ check "the Advanced entries were installed" \
          && echo yes || echo no)" "yes"
 check "gs-hotkeyd.py was installed" \
       "$([ -x "${T}/usr/local/bin/gs-hotkeyd.py" ] && echo yes || echo no)" "yes"
-check "the idle Fn watcher unit was installed under the default (fn) trigger" \
-      "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "yes"
 
 cfg="${T}/home/ark/.config/retroarch/retroarch.cfg"
 check "autosave on"    "$(grep -m1 '^savestate_auto_save' "${cfg}" | cut -d'"' -f2)" "true"
@@ -118,8 +116,6 @@ check "switching to the power trigger hooks pause.sh" \
       "$(grep -q 'gs-suspend' "${T}/usr/local/bin/pause.sh" && echo yes || echo no)" "yes"
 check "the stock pause.sh was backed up" \
       "$([ -f "${T}/usr/local/bin/pause.sh.gs-orig" ] && echo yes || echo no)" "yes"
-check "the idle Fn watcher unit is removed under the power-only trigger" \
-      "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "no"
 
 sed -i '/^GS_TRIGGER=/d' "${CONF}"
 echo "GS_TRIGGER=fn" >> "${CONF}"
@@ -128,14 +124,10 @@ check "switching back to fn un-hooks pause.sh again" \
       "$(grep -q 'gs-suspend' "${T}/usr/local/bin/pause.sh" && echo yes || echo no)" "no"
 check "and cleans up the backup it made" \
       "$([ -f "${T}/usr/local/bin/pause.sh.gs-orig" ] && echo yes || echo no)" "no"
-check "switching back to fn reinstalls the idle Fn watcher unit" \
-      "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "yes"
 
 # --- uninstall -------------------------------------------------------------
 "${ROOT}/uninstall.sh" --yes --root "${T}" > "${WORK}/uninstall.log" 2>&1
 check "uninstall succeeds" "$?" "0"
-check "uninstall removes the idle Fn watcher unit" \
-      "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "no"
 
 rm -rf "${T}/home/ark/.config/gameswitcher"
 AFTER="$(snapshot)"
@@ -167,5 +159,14 @@ check "uninstall restores a pre-existing hook from an older version" \
       "$(grep -c 'stock-original' "${T}/usr/local/bin/pause.sh")" "1"
 check "and removes that backup" \
       "$([ -f "${T}/usr/local/bin/pause.sh.gs-orig" ] && echo yes || echo no)" "no"
+
+# --- installing over a leftover idle-hotkey unit from an older version -----
+# (rounds 9-13 shipped a persistent gs-hotkeyd-idle.service; dropped since --
+# a fresh install must still clean up anyone upgrading from that version)
+mkdir -p "${T}/etc/systemd/system"
+printf '[Unit]\nDescription=old idle watcher\n' > "${T}/etc/systemd/system/gs-hotkeyd-idle.service"
+"${ROOT}/install.sh" --yes --root "${T}" > "${WORK}/idle-cleanup.log" 2>&1
+check "installing over an older version removes its leftover idle-hotkey unit" \
+      "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "no"
 
 exit "${FAIL}"

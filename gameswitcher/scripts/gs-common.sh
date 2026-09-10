@@ -147,26 +147,6 @@ gs_display_size() {
   printf '640:480'
 }
 
-# Is one of dArkOS's own standalone emulators (outside our RetroArch-only
-# scope, and with no hook into their lifecycle) currently running?  Modeled
-# on OnionUI/Onion's own system_state_update(): an explicit, hardcoded list
-# of known binaries is the same approach it uses to solve this identical
-# problem -- there is no generic trick to detect "something else has the
-# screen" beyond checking the finite set of programs you actually know
-# about.  Matched by full path via `pgrep -f`, not an exact comm name, to
-# avoid the TASK_COMM_LEN collision class of bug fixed in gs-suspend.sh.
-gs_foreign_emulator_running() {
-  local bin
-  for bin in /opt/drastic/bin/drastic \
-             /opt/ppsspp/PPSSPPSDL /opt/ppsspp-2021/PPSSPPSDL \
-             /opt/dolphin/dolphin-emu-nogui \
-             /opt/flycastsa/flycast \
-             /opt/bigpemu/bigpemu; do
-    pgrep -f "${bin}" >/dev/null 2>&1 && return 0
-  done
-  return 1
-}
-
 # ---------------------------------------------------------------------------
 # Talking to a live RetroArch
 # ---------------------------------------------------------------------------
@@ -196,12 +176,10 @@ gs_wait_for_teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Freeze EmulationStation for the life of the switch loop (gs-shim.sh) or the
-# idle carousel (Game Switcher.sh), and resume it on every exit path.  Always
-# on: mid-game, ES's real binary can still grab the display in the gap
-# between one RetroArch instance quitting and the next starting; idle in ES,
-# nothing else stops ES's own event loop from rendering while the carousel
-# is also up.  Never `systemctl stop`/`kill --kill-whom=main` it:
+# Freeze EmulationStation for the life of the switch loop (gs-shim.sh), and
+# resume it on every exit path.  Always on: ES's real binary can still grab
+# the display in the gap between one RetroArch instance quitting and the
+# next starting.  Never `systemctl stop`/`kill --kill-whom=main` it:
 # `emulationstation.service` is `Type=simple` with
 # `ExecStart=.../emulationstation.sh`, a bash wrapper that launches the real
 # `emulationstation` binary as a plain foreground child -- no `exec` --  so

@@ -6,35 +6,19 @@
 # reachable after a reboot and not only mid-session.  Picking a game hands off
 # to /usr/local/bin/<emulator>, which is the shim - from there the normal
 # suspend/switch loop takes over.
+#
+# Only reachable this way -- ES's own menu can't be on screen while a game
+# or standalone emulator already has the display, and ES itself deinits its
+# renderer before running any Options-menu script (GuiTools::launchTool in
+# EmulationStation-fcamod), so nothing here needs to guard against that or
+# freeze ES itself.
 #############################################################################
 
 # shellcheck disable=SC1090
 . "${GS_COMMON:-/usr/local/bin/gs-common.sh}"
 
-# Reachable two ways now: the Options menu entry (always safe -- ES's menu
-# isn't reachable while a game or standalone emulator has the screen anyway)
-# and a system-wide Fn tap via gs-hotkeyd-idle.service, which fires blindly
-# on every clean tap regardless of what's currently running.  Bail before
-# touching the display if a RetroArch session is already active (the
-# in-game watcher owns that case -- see gs-suspend.sh) or a standalone
-# emulator has the screen (gs_foreign_emulator_running).
-if gs_session_read && kill -0 "${GS_S_PID}" 2>/dev/null; then
-  exit 0
-fi
-gs_foreign_emulator_running && exit 0
-
 gs_init_dirs
 gs_recents_seed
-
-# Unlike the mid-game invocation (gs-shim.sh replaces retroarch, so ES is
-# structurally guaranteed to be blocked in its own system() call), ES is
-# genuinely alive and rendering its own menu when this script is reached
-# idle -- nothing stops it from continuing to draw while the carousel also
-# tries to.  Same self-heal/freeze/trap/watchdog sequence gs-shim.sh uses.
-gs_es_resume
-gs_es_freeze
-trap 'gs_es_resume' EXIT
-gs_es_watchdog_start "$$"
 
 run_ui() {
   rm -f "${GS_CHOICE}" 2>/dev/null
@@ -87,10 +71,7 @@ while true; do
   [ -n "${governor}" ] && [ -x /usr/local/bin/perfmax ] && \
     sudo /usr/local/bin/perfmax "${governor}" "${GS_C_ROM}" >/dev/null 2>&1
 
-  # GS_ES_FROZEN=1 tells the shim we already froze ES ourselves above, so it
-  # skips its own self-heal/freeze -- otherwise that resume-then-refreeze
-  # blip lands right as the game is trying to take the screen.  See gs-shim.sh.
-  GS_ES_FROZEN=1 SDL_VIDEO_EGL_DRIVER="libEGL.so" nice -n -19 \
+  SDL_VIDEO_EGL_DRIVER="libEGL.so" nice -n -19 \
     "${GS_BIN}/${emulator}" -L "${GS_C_CORE}" "${GS_C_ROM}"
 
   [ -x /usr/local/bin/perfnorm ] && sudo /usr/local/bin/perfnorm >/dev/null 2>&1

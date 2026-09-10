@@ -376,79 +376,7 @@ check "the switch continued into the next game rather than aborting the session"
 check "the second launch used the picked game" \
       "$(tail -1 "${WORK}/launches.log")" "-L /cores/mgba.so /roms/gba/Two.gba"
 
-# --- 11. Game Switcher.sh freezes ES unconditionally too, no setting needed -
-# Unlike gs-shim.sh's mid-game invocation, ES is genuinely alive and
-# rendering when Game Switcher.sh is reached idle -- nothing else stops it
-# from contending with the carousel for the display, so this must always
-# freeze it, not just when some setting says to.  Runs the REAL
-# Game Switcher.sh (stubbing the carousel binary to return straight to
-# EmulationStation, reusing the systemctl/pgrep/sudo stubs from scenario 9).
-reset_case
-rm -f "${WORK}/sudo.log" "${GS_RUN}/gs_session"
-cat > "${GS_OPT}/gameswitcher" <<'STUB'
-#!/bin/bash
-exit 10
-STUB
-chmod +x "${GS_OPT}/gameswitcher"
-
-PATH="${SUDOBIN}:${PATH}" "${ROOT}/scripts/Game Switcher.sh" >/dev/null 2>&1
-check "Game Switcher.sh freezes the real ES binary with no setting involved" \
-      "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "1"
-check "Game Switcher.sh resumes it again on exit" \
-      "$(grep -c -- 'kill -CONT 5001' "${WORK}/sudo.log")" "2"
-rm -f "${GS_OPT}/gameswitcher"
-
-# --- 12. GS_ES_FROZEN=1 stops gs-shim.sh from re-freezing ES itself --------
-# Game Switcher.sh already froze ES before handing off to the emulator; if
-# gs-shim.sh redid its own self-heal (CONT) + freeze (STOP) here too, that
-# resume-then-refreeze blip would land right as the new game is trying to
-# take the screen. GS_ES_FROZEN=1 (set by Game Switcher.sh -- see scenario
-# 13) must skip both, leaving only the unconditional exit-trap CONT.
-reset_case
-rm -f "${WORK}/sudo.log"
-printf 'end\n' > "${WORK}/ra.plan"
-: > "${WORK}/ui.plan"
-GS_ES_FROZEN=1 PATH="${SUDOBIN}:${PATH}" "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc
-check "GS_ES_FROZEN=1 skips the shim's own freeze" \
-      "$(grep -c -- 'kill -STOP 5001' "${WORK}/sudo.log")" "0"
-check "GS_ES_FROZEN=1 skips the shim's own self-heal resume too" \
-      "$(grep -c -- 'kill -CONT 5001' "${WORK}/sudo.log")" "1"
-
-# --- 13. Game Switcher.sh marks ES as already frozen for the emulator it
-# launches, so the handoff above actually happens on the device. -----------
-reset_case
-rm -f "${WORK}/sudo.log" "${GS_RUN}/gs_session" "${WORK}/env.log"
-cat > "${GS_OPT}/gameswitcher" <<'STUB'
-#!/bin/bash
-{
-  echo "action=launch"
-  echo "key=deadbeef"
-  echo "emulator=retroarch"
-  echo "core=/cores/snes9x.so"
-  echo "rom=/roms/snes/One.sfc"
-} > "${GS_RUN}/gs_choice"
-exit 0
-STUB
-chmod +x "${GS_OPT}/gameswitcher"
-
-cat > "${GS_BIN}/retroarch" <<'STUB'
-#!/bin/bash
-echo "GS_ES_FROZEN=${GS_ES_FROZEN:-unset}" >> "${WORK}/env.log"
-exit 0
-STUB
-chmod +x "${GS_BIN}/retroarch"
-
-PATH="${SUDOBIN}:${PATH}" "${ROOT}/scripts/Game Switcher.sh" >/dev/null 2>&1
-check "Game Switcher.sh marks ES as already frozen for the emulator it launches" \
-      "$(cat "${WORK}/env.log" 2>/dev/null)" "GS_ES_FROZEN=1"
-rm -f "${GS_OPT}/gameswitcher"
-
-# Restore the real shim before any further scenario calls "${GS_BIN}/retroarch"
-# expecting gs-shim.sh's actual behavior, not the env-dumping stub above.
-cp "${ROOT}/scripts/gs-shim.sh" "${GS_BIN}/retroarch"
-chmod +x "${GS_BIN}/retroarch"
-
-# --- 14. a failing launch is captured, not indistinguishable from a normal
+# --- 11. a failing launch is captured, not indistinguishable from a normal
 # quit.  Round 11's bug report turned out to be RetroArch itself exiting
 # almost immediately with no visibility into why -- gs-shim.sh now logs its
 # exit code, how long it ran, and (when that looks like a failure) its
@@ -483,54 +411,6 @@ fi
 exit 0
 STUB
 chmod +x "${GS_OPT}/orig/retroarch"
-
-# --- 15. a launch-time crash is retried once, and a second attempt that
-# succeeds lets the game actually run.  Confirmed on-device: RetroArch
-# segfaults (SIGSEGV) right at launch when reached via the idle-Fn path,
-# with a kernel-side DRM modeset (vop_crtc_enable) landing at the exact
-# same moment -- a one-time collision with EmulationStation's still-held
-# display state, not a persistent condition, so a second attempt should
-# find a clean device. -------------------------------------------------
-reset_case
-rm -f "${GS_STATE}/gameswitcher.log" "${WORK}/crash.turn"
-cat > "${GS_OPT}/orig/retroarch" <<'STUB'
-#!/bin/bash
-echo "$*" >> "${WORK}/launches.log"
-n=$(cat "${WORK}/crash.turn" 2>/dev/null || echo 1)
-echo $(( n + 1 )) > "${WORK}/crash.turn"
-if [ "${n}" = "1" ]; then
-  kill -SEGV $$
-fi
-exit 0
-STUB
-chmod +x "${GS_OPT}/orig/retroarch"
-: > "${WORK}/ui.plan"
-GS_DEBUG=1 "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1
-check "a launch-time crash is retried" \
-      "$(grep -c 'crashed right at launch, retrying' "${GS_STATE}/gameswitcher.log")" "1"
-check "the game actually launched on the second attempt" \
-      "$(wc -l < "${WORK}/launches.log")" "2"
-check "the retried launch's own clean exit is logged with the right attempt number" \
-      "$(grep -c 'exited rc=0 after.*(attempt 2)' "${GS_STATE}/gameswitcher.log")" "1"
-
-# --- 16. a launch that keeps crashing gives up after exactly one retry --
-# rather than looping forever if it's not a one-time collision after all.
-reset_case
-rm -f "${GS_STATE}/gameswitcher.log"
-cat > "${GS_OPT}/orig/retroarch" <<'STUB'
-#!/bin/bash
-echo "$*" >> "${WORK}/launches.log"
-kill -SEGV $$
-STUB
-chmod +x "${GS_OPT}/orig/retroarch"
-: > "${WORK}/ui.plan"
-GS_DEBUG=1 "${GS_BIN}/retroarch" -L /cores/snes9x.so /roms/snes/One.sfc >/dev/null 2>&1
-check "a persistently crashing launch is attempted exactly twice" \
-      "$(wc -l < "${WORK}/launches.log")" "2"
-check "it gives up after the one retry rather than looping forever" \
-      "$(grep -c 'retrying once' "${GS_STATE}/gameswitcher.log")" "1"
-check "the second crash is still logged with its own attempt number" \
-      "$(grep -c 'exited rc=139 after.*(attempt 2)' "${GS_STATE}/gameswitcher.log")" "1"
 
 # Restore the well-behaved stub so the tree is left in a known state.
 cat > "${GS_OPT}/orig/retroarch" <<'STUB'

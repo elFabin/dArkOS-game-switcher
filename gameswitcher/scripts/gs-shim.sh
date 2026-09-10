@@ -141,20 +141,12 @@ fi
 
 # Self-heal first: a prior run that was killed outright (SIGKILL bypasses any
 # trap) may have left EmulationStation frozen.  Always start from a known
-# state before possibly freezing it again ourselves -- unless our caller
-# already did both for this exact handoff (GS_ES_FROZEN=1, set by Game
-# Switcher.sh when it launches the emulator straight from the idle
-# carousel).  Redoing it here would resume then immediately re-freeze ES
-# right as the new game is trying to take the screen, a window it can lose
-# -- control goes back to ES instead of the game actually starting.
+# state before possibly freezing it again ourselves.
+gs_es_resume
+
 trap 'gs_session_clear; gs_es_resume; gs_hotkeyd_stop' EXIT
 
-if [ "${GS_ES_FROZEN:-0}" = "1" ]; then
-  gs_log "gs-shim: ES already frozen by our caller, not re-freezing"
-else
-  gs_es_resume
-  gs_es_freeze
-fi
+gs_es_freeze
 gs_es_watchdog_start "$$"
 gs_hotkeyd_start
 
@@ -179,46 +171,22 @@ while true; do
   # match this shim's own PID as the game's.
   #
   # Its stdout/stderr are captured (rather than left to inherit whatever
-  # this shim's own were, which for the idle-carousel handoff traces back to
-  # a systemd service's journal, if anywhere) so a launch failure actually
-  # shows up next to the freeze/resume lines in gameswitcher.log instead of
-  # looking identical to "the player quit normally".
+  # this shim's own were) so a launch failure actually shows up next to the
+  # freeze/resume lines in gameswitcher.log instead of looking identical to
+  # "the player quit normally".
   launch_out="${GS_RUN}/gs_last_launch.log"
-  attempt=1
-  while :; do
-    launch_start=$(date +%s)
-    "${orig}" "${args[@]}" > "${launch_out}" 2>&1 &
-    ra_pid=$!
-    [ -n "${GS_ROM}" ] && \
-      gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
-    wait "${ra_pid}"
-    rc=$?
-    elapsed=$(( $(date +%s) - launch_start ))
-    gs_log "orig ${emulator} exited rc=${rc} after ${elapsed}s (attempt ${attempt})"
-    if [ "${rc}" -ne 0 ] || [ "${elapsed}" -lt 3 ]; then
-      gs_log "orig ${emulator} output: $(tr '\n' ' ' < "${launch_out}" 2>/dev/null)"
-    fi
-    # A fault signal (SIGILL/SIGABRT/SIGBUS/SIGFPE/SIGSEGV -- never
-    # SIGTERM/SIGKILL, which is gs-suspend.sh's own deliberate escalation,
-    # see scenario 10) landing within a couple of seconds of launch matches
-    # RetroArch's own DRM/RGA init colliding with a display EmulationStation
-    # hadn't fully let go of yet -- confirmed on the idle-Fn path via a
-    # kernel-side `vop_crtc_enable` modeset landing right at crash time.
-    # SIGSTOP pauses ES's scheduling, not its DRM master/GL context, so this
-    # is a one-time snapshot of whatever ES was doing when it got frozen,
-    # not a persistent condition -- retry once before giving up.
-    case "${rc}" in
-      132|134|135|136|139)
-        if [ "${elapsed}" -lt 5 ] && [ "${attempt}" -lt 2 ]; then
-          attempt=$(( attempt + 1 ))
-          gs_log "orig ${emulator} crashed right at launch, retrying once (attempt ${attempt})"
-          sleep 1
-          continue
-        fi
-        ;;
-    esac
-    break
-  done
+  launch_start=$(date +%s)
+  "${orig}" "${args[@]}" > "${launch_out}" 2>&1 &
+  ra_pid=$!
+  [ -n "${GS_ROM}" ] && \
+    gs_session_write "${emulator}" "${GS_CORE}" "${GS_ROM}" "$(gs_key "${GS_ROM}")" "${ra_pid}"
+  wait "${ra_pid}"
+  rc=$?
+  elapsed=$(( $(date +%s) - launch_start ))
+  gs_log "orig ${emulator} exited rc=${rc} after ${elapsed}s"
+  if [ "${rc}" -ne 0 ] || [ "${elapsed}" -lt 3 ]; then
+    gs_log "orig ${emulator} output: $(tr '\n' ' ' < "${launch_out}" 2>/dev/null)"
+  fi
   gs_session_clear
 
   # No switch was asked for: the player quit normally, hand the screen back

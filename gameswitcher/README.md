@@ -66,7 +66,7 @@ overlay at the top and bottom rather than eating into the picture.
 
 | Button | Action |
 |---|---|
-| Fn (tap, in game or idle in ES) | Snapshot the game and open the switcher, or open it directly if idle |
+| Fn (tap, mid-game) | Snapshot the game and open the switcher |
 | Left / Right | Swipe to the next/previous recent game |
 | A | Resume where you left off |
 | X | Start over (the auto savestate is moved aside, not deleted) |
@@ -80,20 +80,13 @@ else and that combo goes to ogage exactly as before (Fn+D-pad for
 brightness, Fn+Volume for fine brightness, Fn+Power to shut down). The power
 button itself is untouched: a short press still just suspends.
 
-Fn works two ways, both installed when `GS_TRIGGER` includes `fn` (the
-default): mid-game it snapshots and opens the switcher exactly as before;
-idle in EmulationStation's own menus, a persistent watcher
-(`gs-hotkeyd-idle.service`, separate from the per-game one `gs-shim.sh`
-starts and stops) opens the carousel directly — the same thing `Options >
-Game Switcher` does, just without navigating there. It won't fire over an
-active game (the in-game watcher already owns that) or over DraStic,
-PPSSPP, Dolphin, Flycast, or BigPEmu — `Game Switcher.sh` checks for each
-of those by their known binary path before doing anything, the same
-approach Onion OS's own Game Switcher uses to solve this identical problem
-(`OnionUI/Onion`'s `system_state_update()`, an explicit list of known
-process names per app it ships). A genuinely third-party/sideloaded
-emulator outside that list isn't detectable this way — the same residual
-gap Onion has — so a Fn tap there would still open the carousel over it.
+Fn only works mid-game, installed when `GS_TRIGGER` includes `fn` (the
+default): it snapshots the running game and opens the switcher. The
+carousel is also reachable idle in EmulationStation's own menus via
+`Options > Game Switcher` — there's no separate Fn shortcut for that,
+since EmulationStation only cleanly releases its renderer for a script it
+runs itself, not for anything triggered externally while it's still
+genuinely on screen.
 
 A/B/X/Y above are the buttons printed on the case, whatever their physical
 position — `/opt/inttools/gamecontrollerdb.txt` binds SDL's canonical button
@@ -112,7 +105,6 @@ always means "the button labeled A." On a device where Fn isn't code 708, use
 | `~/.config/retroarch{,32}/retroarch.cfg` and `.bak` | `savestate_auto_save`, `savestate_auto_load`, `network_cmd_enable` on; `screenshots_in_content_dir`, `video_gpu_screenshot` off; `screenshot_directory` pointed at the switcher's folder. Previous values recorded for the uninstaller |
 | `/opt/system/Game Switcher.sh` | New Options entry |
 | `/opt/system/Advanced/Game Switcher Button.sh`, `Game Switcher Diagnostics.sh` | New Advanced entries |
-| `/etc/systemd/system/gs-hotkeyd-idle.service` | Only installed if `GS_TRIGGER` includes `fn` — the persistent idle-in-ES Fn watcher, enabled and started immediately |
 | `~/.config/gameswitcher/` | Recents list, thumbnails, screenshots, settings, log |
 
 The `.bak` config is patched alongside the live one because dArkOS restores
@@ -192,17 +184,21 @@ waited out the full `GS_QUIT_TIMEOUT` before escalating, every switch,
 regardless of the game.
 
 EmulationStation is also frozen (`SIGSTOP`) unconditionally for the life of
-the carousel, resumed on every exit path including a crash, both mid-game
-(`gs-shim.sh`) and when opened idle from ES itself (`Game Switcher.sh`,
-including the [system-wide Fn shortcut](#controls)) — there's no setting
-for this, it's always on. It wasn't the actual cause of the mid-game
-symptom above (ES's real process is never the one doing the rendering
-there, freeze or not), but it's not optional either: opened idle, ES is
-genuinely alive and rendering its own menu the whole time, with nothing
-else to stop it from contending with the carousel for the display, so the
-freeze is what actually keeps ES off-screen in that case. The carousel's
-black-frame-first startup (see `gameswitcher.c`) is separate, independent
-hardening for genuine display-handover timing.
+the carousel mid-game (`gs-shim.sh`), resumed on every exit path including
+a crash — there's no setting for this, it's always on. It wasn't the
+actual cause of the symptom above (ES's real process is never the one
+doing the rendering there, freeze or not); it's a defensive safety net for
+the gap between one RetroArch instance quitting and the next starting.
+The carousel's black-frame-first startup (see `gameswitcher.c`) is
+separate, independent hardening for genuine display-handover timing.
+
+`Game Switcher.sh` (the Options-menu entry) doesn't freeze ES at all —
+EmulationStation deinits its own renderer before running any Options-menu
+script (confirmed in EmulationStation-fcamod's own source,
+`GuiTools::launchTool`), so nothing external needs to. This is also why
+there's no idle-in-ES Fn shortcut: a `SIGSTOP` from outside can pause ES's
+scheduling but can never trigger that same clean deinit, so a game
+launched that way could collide with display state ES never released.
 
 If it still happens after this fix, set `GS_DEBUG=1` and reproduce it;
 `gameswitcher.log` will show `gs_es_resume`/`gs_es_freeze` firing (or not)
@@ -226,10 +222,8 @@ src/gameswitcher.c   the carousel (core SDL2 only)
 src/font.h           baked-in glyph atlas, generated by tools/genfont.py
 scripts/gs-shim.sh   the switch loop, installed over /usr/local/bin/retroarch
 scripts/gs-suspend.sh  snapshot + quit, run by the Fn watcher (or pause.sh)
-scripts/gs-hotkeyd.py  the Fn-tap watcher; started for the life of a game
-                     by gs-shim.sh, or run persistently by
-                     gs-hotkeyd-idle.service for the idle-in-ES shortcut
-scripts/gs-hotkeyd-idle.service  the persistent watcher's systemd unit
+scripts/gs-hotkeyd.py  the Fn-tap watcher, started for the life of a game
+                     by gs-shim.sh
 scripts/gs-menu.sh   dialog fallback UI, used where the carousel can't be built
                      or fails to start
 scripts/gs-doctor.sh Game Switcher diagnostics (config, tools, hotkey, log)
@@ -295,13 +289,3 @@ this round:
 8. A plain power press should suspend, both in EmulationStation and mid-game.
 9. Power press inside DraStic still suspends — no regression for standalones.
 10. `./uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.
-11. Tap Fn while idle in EmulationStation's own menus (not in a game) — the
-    carousel should open directly, same as `Options > Game Switcher`, and
-    EmulationStation itself should stay hidden the whole time rather than
-    visibly rendering behind/through the carousel (it was still doing so
-    until this round — ES is genuinely alive and drawing when idle, unlike
-    mid-game, so it needs the freeze to actually stay off-screen). If it
-    still doesn't, `systemctl status gs-hotkeyd-idle` to confirm the
-    watcher is actually running.
-12. Tap Fn while DraStic (or PPSSPP/Dolphin/Flycast/BigPEmu) is running —
-    should do nothing, not pop the carousel up over it.

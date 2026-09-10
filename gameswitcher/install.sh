@@ -43,8 +43,7 @@ SYSMENU="${ROOT}/opt/system"
 SYSADV="${SYSMENU}/Advanced"
 STATE="${ROOT}${GS_HOME}/.config/gameswitcher"
 CFGBACKUP="${STATE}/retroarch-cfg.backup"
-SYSTEMD_DIR="${ROOT}/etc/systemd/system"
-IDLE_UNIT="${SYSTEMD_DIR}/gs-hotkeyd-idle.service"
+IDLE_UNIT="${ROOT}/etc/systemd/system/gs-hotkeyd-idle.service"
 CONF="${STATE}/gameswitcher.conf"
 
 say() { printf '%s\n' "$*"; }
@@ -192,32 +191,19 @@ sync_pause_hook() {
   [ -e "${BIN}/pause.sh.gs-orig" ] && ${SUDO} chmod 777 "${BIN}/pause.sh.gs-orig"
 }
 
-# A persistent Fn watcher, unlike the per-game one gs-shim.sh starts and
-# stops, so the carousel is reachable straight from EmulationStation's own
-# idle menu -- Game Switcher.sh itself guards against firing over an active
-# RetroArch session or a standalone emulator. Tied to GS_TRIGGER the same
-# way pause.sh is: only installed when Fn is actually the configured
-# trigger, and torn down the moment it isn't.
-sync_idle_hotkey() {
-  local trigger; trigger="$(effective_trigger)"
-  case "${trigger}" in
-    fn|both)
-      ${SUDO} mkdir -p "${SYSTEMD_DIR}"
-      ${SUDO} cp "${GS_SRC}/scripts/gs-hotkeyd-idle.service" "${IDLE_UNIT}"
-      ${SUDO} chmod 644 "${IDLE_UNIT}"
-      if [ -z "${ROOT}" ]; then
-        ${SUDO} systemctl daemon-reload
-        ${SUDO} systemctl enable --now gs-hotkeyd-idle >/dev/null 2>&1
-      fi
-      ;;
-    *)
-      if [ -e "${IDLE_UNIT}" ]; then
-        [ -z "${ROOT}" ] && ${SUDO} systemctl disable --now gs-hotkeyd-idle >/dev/null 2>&1
-        ${SUDO} rm -f "${IDLE_UNIT}"
-        [ -z "${ROOT}" ] && ${SUDO} systemctl daemon-reload
-      fi
-      ;;
-  esac
+# Older versions (rounds 9-13) installed a persistent systemd unit so the
+# carousel could be opened straight from EmulationStation's idle menus, not
+# just mid-game or via Options.  That path turned out to have no reliable
+# fix (ES only releases its renderer cleanly on its own launch code path --
+# see Game Switcher.sh's header comment) and was dropped.  Clean up any
+# leftover install from an older version unconditionally, regardless of
+# GS_TRIGGER, the same way uninstall.sh already does.
+cleanup_idle_hotkey() {
+  if [ -e "${IDLE_UNIT}" ]; then
+    [ -z "${ROOT}" ] && ${SUDO} systemctl disable --now gs-hotkeyd-idle >/dev/null 2>&1
+    ${SUDO} rm -f "${IDLE_UNIT}"
+    [ -z "${ROOT}" ] && ${SUDO} systemctl daemon-reload
+  fi
 }
 
 install_scripts() {
@@ -253,7 +239,7 @@ install_scripts() {
 
   # Decided from GS_TRIGGER now that the config above is in its final state.
   sync_pause_hook
-  sync_idle_hotkey
+  cleanup_idle_hotkey
 
   ${SUDO} chmod 777 "${BIN}/gs-common.sh" "${BIN}/gs-suspend.sh" "${BIN}/gs-menu.sh" \
                     "${BIN}/gs-hotkeyd.py" "${BIN}/gs-doctor.sh" \
@@ -374,14 +360,6 @@ case "$(effective_trigger)" in
     say "button.)  The power button still just suspends."
     ;;
 esac
-case "$(effective_trigger)" in
-  fn|both)
-    say "Tap Fn while browsing EmulationStation itself, not just mid-game, to"
-    say "open the carousel directly -- or use Options > Game Switcher."
-    ;;
-  *)
-    say "The carousel is also reachable from Options > Game Switcher."
-    ;;
-esac
+say "The carousel is also reachable from Options > Game Switcher."
 [ -z "${ASSUME_YES}" ] && sleep 4
 exit 0
