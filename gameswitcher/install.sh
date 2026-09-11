@@ -339,7 +339,6 @@ install_ui
 if [ -z "${ROOT}" ]; then
   # shellcheck disable=SC1091
   . "${BIN}/gs-common.sh"
-  gs_recents_seed
   check_ffmpeg
 fi
 

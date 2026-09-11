@@ -18,7 +18,6 @@
 . "${GS_COMMON:-/usr/local/bin/gs-common.sh}"
 
 gs_init_dirs
-gs_recents_seed
 
 run_ui() {
   rm -f "${GS_CHOICE}" 2>/dev/null

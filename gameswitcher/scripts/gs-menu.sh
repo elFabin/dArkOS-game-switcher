@@ -68,7 +68,6 @@ gs_write_choice() {
   gs_fix_perm "${GS_CHOICE}"
 }
 
-gs_recents_seed
 if [ ! -s "${GS_RECENTS}" ]; then
   stop_controls
   msgbox "No recent games yet.  Play something first and the switcher will remember it."

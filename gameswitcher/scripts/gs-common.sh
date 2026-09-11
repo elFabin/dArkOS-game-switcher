@@ -320,43 +320,6 @@ gs_recents_remove() {
   rm -f "${GS_THUMBS}/${key}.bmp" 2>/dev/null
 }
 
-# Populate an empty recents list from RetroArch's own history playlist, so the
-# carousel has something in it the very first time it is opened.  Same source
-# of truth scripts/get_last_played.sh uses.
-gs_recents_seed() {
-  local emulator playlist
-  [ -s "${GS_RECENTS}" ] && return 0
-  gs_init_dirs
-  for emulator in retroarch retroarch32; do
-    playlist="${GS_HOME}/.config/${emulator}/playlists/builtin/content_history.lpl"
-    [ -r "${playlist}" ] || continue
-    python3 - "${playlist}" "${emulator}" <<'PY' >> "${GS_RECENTS}" 2>/dev/null
-import hashlib, json, os, sys, time
-
-playlist, emulator = sys.argv[1], sys.argv[2]
-try:
-    with open(playlist, encoding="utf-8", errors="replace") as fh:
-        items = json.load(fh).get("items", [])
-except (OSError, ValueError):
-    sys.exit(0)
-
-now = int(time.time())
-for offset, item in enumerate(items[:12]):
-    rom = item.get("path") or ""
-    core = item.get("core_path") or ""
-    if not rom or not os.path.exists(rom):
-        continue
-    key = hashlib.sha1(rom.encode("utf-8")).hexdigest()[:16]
-    title = os.path.splitext(os.path.basename(rom))[0]
-    parts = rom.strip("/").split("/")
-    system = parts[1] if len(parts) > 2 else "games"
-    # Stagger the timestamps so playlist order survives the newest-first sort.
-    print("\t".join([key, str(now - offset - 1), emulator, core, system, title, rom]))
-PY
-  done
-  gs_fix_perm "${GS_RECENTS}"
-}
-
 # ---------------------------------------------------------------------------
 # The UI's answer
 # ---------------------------------------------------------------------------
