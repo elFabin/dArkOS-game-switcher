@@ -134,10 +134,9 @@ patch_retroarch() {
       # where we never look, and where ES would scrape it as a PICO-8 cart,
       # since .png is a real ROM extension for the fake08 core.
       set_cfg "${cfg}" screenshots_in_content_dir "false"
-      # Take the shot from the core's framebuffer rather than glReadPixels on
-      # the Mali blob: more reliable, and a cleaner thumbnail with no shaders
-      # or overlays baked in.
-      set_cfg "${cfg}" video_gpu_screenshot "false"
+      # Take the shot using the GPU, so the final result is what the player actually
+      # sees.
+      set_cfg "${cfg}" video_gpu_screenshot "true"
     done
   done
 }
