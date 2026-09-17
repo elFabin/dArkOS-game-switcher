@@ -1,8 +1,8 @@
 #!/bin/bash
 #############################################################################
-# uninstall.sh - put everything install.sh touched back the way it was.
+# gs-uninstall.sh - put everything gs-install.sh touched back the way it was.
 #
-# Usage:  ./uninstall.sh [--yes] [--root DIR]
+# Usage:  ./gs-uninstall.sh [--yes] [--root DIR]
 #############################################################################
 
 set -u

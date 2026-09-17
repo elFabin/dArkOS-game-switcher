@@ -56,7 +56,7 @@ snapshot() { ( cd "${T}" && find . -type f | sort | xargs md5sum ); }
 BEFORE="$(snapshot)"
 
 # --- install ---------------------------------------------------------------
-"${ROOT}/install.sh" --yes --root "${T}" > "${WORK}/install.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" > "${WORK}/install.log" 2>&1
 check "install succeeds" "$?" "0"
 
 check "retroarch is now the shim" \
@@ -101,7 +101,7 @@ check "the settings file was installed" \
 echo "GS_MAX_RECENTS=99" >> "${T}/home/ark/.config/gameswitcher/gameswitcher.conf"
 
 # Installing twice must not capture the shim as if it were the stock wrapper.
-"${ROOT}/install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
 check "reinstalling keeps the real original" \
       "$(grep -c 'gs-shim' "${T}/opt/gameswitcher/orig/retroarch")" "0"
 check "reinstalling keeps edited settings" \
@@ -111,7 +111,7 @@ check "reinstalling keeps edited settings" \
 CONF="${T}/home/ark/.config/gameswitcher/gameswitcher.conf"
 sed -i '/^GS_TRIGGER=/d' "${CONF}"
 echo "GS_TRIGGER=power" >> "${CONF}"
-"${ROOT}/install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
 check "switching to the power trigger hooks pause.sh" \
       "$(grep -q 'gs-suspend' "${T}/usr/local/bin/pause.sh" && echo yes || echo no)" "yes"
 check "the stock pause.sh was backed up" \
@@ -119,14 +119,14 @@ check "the stock pause.sh was backed up" \
 
 sed -i '/^GS_TRIGGER=/d' "${CONF}"
 echo "GS_TRIGGER=fn" >> "${CONF}"
-"${ROOT}/install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" >> "${WORK}/install.log" 2>&1
 check "switching back to fn un-hooks pause.sh again" \
       "$(grep -q 'gs-suspend' "${T}/usr/local/bin/pause.sh" && echo yes || echo no)" "no"
 check "and cleans up the backup it made" \
       "$([ -f "${T}/usr/local/bin/pause.sh.gs-orig" ] && echo yes || echo no)" "no"
 
 # --- uninstall -------------------------------------------------------------
-"${ROOT}/uninstall.sh" --yes --root "${T}" > "${WORK}/uninstall.log" 2>&1
+"${ROOT}/scripts/gs-uninstall.sh" --yes --root "${T}" > "${WORK}/uninstall.log" 2>&1
 check "uninstall succeeds" "$?" "0"
 
 rm -rf "${T}/home/ark/.config/gameswitcher"
@@ -141,20 +141,20 @@ fi
 
 # --- Quick Mode must block the install ------------------------------------
 printf '#!/bin/bash\n' > "${T}/usr/local/bin/quickmode.sh"
-"${ROOT}/install.sh" --yes --root "${T}" > "${WORK}/qm.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" > "${WORK}/qm.log" 2>&1
 check "Quick Mode blocks the install" "$?" "1"
 check "and says why" \
       "$(grep -c 'Quick Mode' "${WORK}/qm.log")" "1"
 rm -f "${T}/usr/local/bin/quickmode.sh"
 
-# --- uninstall.sh restores a hook left by an older version of this tool ----
+# --- gs-uninstall.sh restores a hook left by an older version of this tool ----
 # (older releases always hooked pause.sh; this must still be cleaned up on
 # an upgrade even though a fresh install with the default trigger never
 # creates this backup itself)
 printf '#!/bin/bash\necho "stock-original"\n' > "${T}/usr/local/bin/pause.sh.gs-orig"
 printf '#!/bin/bash\n# gs-suspend\necho "hooked"\n' > "${T}/usr/local/bin/pause.sh"
 chmod +x "${T}/usr/local/bin/pause.sh" "${T}/usr/local/bin/pause.sh.gs-orig"
-"${ROOT}/uninstall.sh" --yes --root "${T}" > "${WORK}/legacy-uninstall.log" 2>&1
+"${ROOT}/scripts/gs-uninstall.sh" --yes --root "${T}" > "${WORK}/legacy-uninstall.log" 2>&1
 check "uninstall restores a pre-existing hook from an older version" \
       "$(grep -c 'stock-original' "${T}/usr/local/bin/pause.sh")" "1"
 check "and removes that backup" \
@@ -165,7 +165,7 @@ check "and removes that backup" \
 # a fresh install must still clean up anyone upgrading from that version)
 mkdir -p "${T}/etc/systemd/system"
 printf '[Unit]\nDescription=old idle watcher\n' > "${T}/etc/systemd/system/gs-hotkeyd-idle.service"
-"${ROOT}/install.sh" --yes --root "${T}" > "${WORK}/idle-cleanup.log" 2>&1
+"${ROOT}/scripts/gs-install.sh" --yes --root "${T}" > "${WORK}/idle-cleanup.log" 2>&1
 check "installing over an older version removes its leftover idle-hotkey unit" \
       "$([ -f "${T}/etc/systemd/system/gs-hotkeyd-idle.service" ] && echo yes || echo no)" "no"
 

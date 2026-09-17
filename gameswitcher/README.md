@@ -40,10 +40,10 @@ Quick Mode uses, which is why the two cannot both be active.
 ## Installing
 
 On the device, unzip `GameSwitcher.zip` into `/roms/tools`, then run
-**Options > Tools > Install Game Switcher**. Or from a shell:
+**Options > Tools > GameSwitcher > Game Switcher Setup**. Or from a shell:
 
 ```sh
-./install.sh
+./scripts/gs-install.sh --yes
 ```
 
 Build the drop-in from a checkout with `make package`.
@@ -52,9 +52,13 @@ The installer refuses to run while Quick Mode is enabled — both take over the
 RetroArch savestate settings (and `pause.sh`, if you use the power trigger).
 Disable Quick Mode first.
 
-To remove it: `./uninstall.sh`, or the same Options entry, which turns into
+To remove it you can run the same Options entry, which turns into
 the uninstaller once the switcher is active. Everything it changed is backed
-up first and restored exactly.
+up first and restored exactly. Or from a shell:
+
+```sh
+./scripts/gs-uninstall --yes
+```
 
 ## Controls
 
@@ -288,4 +292,4 @@ this round:
    work — the clean-tap rule is what protects them from the switcher.
 8. A plain power press should suspend, both in EmulationStation and mid-game.
 9. Power press inside DraStic still suspends — no regression for standalones.
-10. `./uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.
+10. `./gs-uninstall.sh`, then confirm RetroArch no longer writes `.state.auto`.

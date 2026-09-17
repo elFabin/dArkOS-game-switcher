@@ -2,7 +2,7 @@
 #############################################################################
 # pause.sh (Game Switcher) - installed over /usr/local/bin/pause.sh only when
 # GS_TRIGGER (power|both) called for it at install time -- with the default
-# trigger (fn), install.sh never touches pause.sh at all, and a power press
+# trigger (fn), gs-install.sh never touches pause.sh at all, and a power press
 # is plain, unmodified dArkOS suspend.
 #
 # Kept live-adjustable rather than baked in at install time: editing

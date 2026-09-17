@@ -29,7 +29,7 @@ section() { printf '\n%s\n' "$1"; }
 # ---------------------------------------------------------------------------
 section "shell syntax"
 # ---------------------------------------------------------------------------
-for f in "${ROOT}"/scripts/* "${ROOT}"/install.sh "${ROOT}"/uninstall.sh; do
+for f in "${ROOT}"/scripts/* "${ROOT}"/scripts/gs-install.sh "${ROOT}"/scripts/gs-uninstall.sh; do
   [ -f "${f}" ] || continue
   case "${f}" in *.gptk|*.py) continue ;; esac
   if bash -n "${f}" 2>/dev/null; then ok "parses $(basename "${f}")"
@@ -51,7 +51,7 @@ rm -rf "${ROOT}"/scripts/__pycache__
 
 if command -v shellcheck >/dev/null 2>&1; then
   for f in "${ROOT}"/scripts/*.sh "${ROOT}"/scripts/pause.sh.gs \
-           "${ROOT}"/install.sh "${ROOT}"/uninstall.sh; do
+           "${ROOT}"/scripts/gs-install.sh "${ROOT}"/scripts/gs-uninstall.sh; do
     if shellcheck -S error -x "${f}" >/dev/null 2>&1; then ok "shellcheck $(basename "${f}")"
     else bad "shellcheck $(basename "${f}")" "$(shellcheck -S error -x "${f}" 2>&1 | head -5)"; fi
   done

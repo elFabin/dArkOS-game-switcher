@@ -49,7 +49,7 @@ GS_HOTKEY_DEVICE="${GS_HOTKEY_DEVICE:-}"
 # Changing GS_TRIGGER here takes effect on the next game launch for the Fn
 # watcher (gs-shim.sh starts/stops it live).  The power-button hook is a
 # system file (pause.sh) and is only installed when the trigger requested at
-# install time included "power" -- flip it on by re-running install.sh.
+# install time included "power" -- flip it on by re-running gs-install.sh.
 
 # Log every switch, screenshot attempt and UI start to
 # ~/.config/gameswitcher/gameswitcher.log.

@@ -11,33 +11,33 @@
 # Options > Advanced > Game Switcher Setup.  Nothing hooks pause.sh or the
 # RetroArch wrapper at build time.
 
-call_chroot "mkdir -p /opt/gameswitcher/payload/scripts /opt/gameswitcher/payload/src /opt/gameswitcher/payload/config"
+call_chroot "mkdir -p /opt/gameswitcher/scripts /opt/gameswitcher/src /opt/gameswitcher/config"
 
-sudo cp gameswitcher/src/gameswitcher.c Arkbuild/opt/gameswitcher/payload/src/
-sudo cp gameswitcher/src/font.h         Arkbuild/opt/gameswitcher/payload/src/
-sudo cp gameswitcher/Makefile           Arkbuild/opt/gameswitcher/payload/
-sudo cp gameswitcher/install.sh         Arkbuild/opt/gameswitcher/payload/
-sudo cp gameswitcher/uninstall.sh       Arkbuild/opt/gameswitcher/payload/
-sudo cp gameswitcher/scripts/gs-common.sh   Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/gs-shim.sh     Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/gs-suspend.sh  Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/gs-menu.sh     Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/gs-hotkeyd.py  Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/gs-doctor.sh   Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/pause.sh.gs    Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/"Game Switcher.sh" Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/"Game Switcher Button.sh" Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/scripts/"Game Switcher Diagnostics.sh" Arkbuild/opt/gameswitcher/payload/scripts/
-sudo cp gameswitcher/config/gameswitcher.conf Arkbuild/opt/gameswitcher/payload/config/
+sudo cp gameswitcher/src/gameswitcher.c Arkbuild/opt/gameswitcher/src/
+sudo cp gameswitcher/src/font.h         Arkbuild/opt/gameswitcher/src/
+sudo cp gameswitcher/Makefile           Arkbuild/opt/gameswitcher/
+sudo cp gameswitcher/scripts/gs-install.sh         Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-uninstall.sh       Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-common.sh   Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-shim.sh     Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-suspend.sh  Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-menu.sh     Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-hotkeyd.py  Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/gs-doctor.sh   Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/pause.sh.gs    Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/"Game Switcher.sh" Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/"Game Switcher Button.sh" Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/scripts/"Game Switcher Diagnostics.sh" Arkbuild/opt/gameswitcher/scripts/
+sudo cp gameswitcher/config/gameswitcher.conf Arkbuild/opt/gameswitcher/config/
 
 # Compile the carousel now, while libsdl2-dev is still on the image.
-call_chroot "cd /opt/gameswitcher/payload &&
+call_chroot "cd /opt/gameswitcher &&
   make &&
   strip gameswitcher
   "
 
 sudo mkdir -p Arkbuild/opt/system/Advanced/
-sudo cp gameswitcher/scripts/"Game Switcher Setup.sh" Arkbuild/opt/system/Advanced/
+sudo cp gameswitcher/"Game Switcher Setup.sh" Arkbuild/opt/system/Advanced/
 
 call_chroot "chown -R ark:ark /opt"
 sudo chmod -R 777 Arkbuild/opt/gameswitcher
