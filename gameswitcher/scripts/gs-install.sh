@@ -14,9 +14,6 @@
 set -u
 
 GS_SRC="$(cd "$(dirname "$(dirname "$0")")" && pwd)"
-echo "Game Switcher source: ${GS_SRC}"
-return 0;
-
 ASSUME_YES=""
 ROOT=""
 
