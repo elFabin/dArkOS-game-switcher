@@ -1,0 +1,188 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Where this lives
+
+This directory (`gameswitcher/`) is a self-contained addon inside a much
+larger checkout of the dArkOS handheld-emulation OS build system (the repo
+root has `build_*.sh` scripts for dozens of unrelated emulators/tools). The
+git remote (`elFabin/dArkOS-game-switcher`) and every commit that matters
+here touch only this directory — treat `gameswitcher/` as the project root
+for all practical purposes. It ships as a drop-in: unzipped into
+`/roms/tools` on a real device and installed via `install.sh`, which patches
+the live system (RetroArch config, `/usr/local/bin/retroarch{,32}`,
+`/opt/system/` menu entries, optionally `pause.sh`).
+
+Target hardware is an **A10 Mini** (RK3326, 640x480, dArkOS/EmulationStation-fcamod).
+There is no way to reach real hardware from a dev/build host — every fix in
+this project's history was designed off logic first, then verified (or
+disproved) against logs and `dmesg` the user pasted back from the device.
+Don't assume a fix works until it's confirmed that way.
+
+## Commands
+
+```sh
+make            # builds ./gameswitcher, the SDL2 carousel binary
+make check      # builds it, then runs test/run_tests.sh
+make package    # produces dist/GameSwitcher.zip, the on-device drop-in
+make clean      # removes the built binary
+```
+
+`make check` already runs `bash -n` on every script, `python3 -m py_compile`
+on `gs-hotkeyd.py`, and `shellcheck -S error -x` on every shell script
+(skipped silently if `shellcheck` isn't installed) as its first section —
+there's no need to invoke shellcheck separately after a normal `make check`.
+
+Running a single test file directly (each takes the project root as `$1`
+and is independently useful while iterating):
+```sh
+./test/shim_case.sh "$(pwd)"       # gs-shim.sh's switch loop, ES freeze, escalation safety
+./test/install_case.sh "$(pwd)"    # install.sh/uninstall.sh round-trip on a --root staging tree
+./test/hotkey_case.sh "$(pwd)"     # gs-hotkeyd.py's TapDetector state machine
+```
+All of it runs against stubs (`sudo`, `systemctl`, `pgrep`, RetroArch itself)
+on PATH — nothing here talks to real hardware. `test/run_tests.sh` is the
+umbrella that also headless-renders the carousel with `SDL_VIDEODRIVER=dummy`.
+
+macOS dev note: the Makefile needs `sdl2-config` or `pkg-config sdl2` on
+`PATH` (`brew install sdl2`); the test scripts use GNU `sed -i` and
+`md5sum`, neither of which stock BSD/macOS ships — `brew install coreutils
+gnu-sed` and prepend their `libexec/gnubin` to `PATH` for `make check`.
+
+## Architecture
+
+**The core trick.** dArkOS/EmulationStation launches a game with one shell
+command it blocks on: `sudo perfmax %GOVERNOR% %ROM%; nice -n -19
+/usr/local/bin/retroarch -L <core> %ROM%; sudo perfnorm`. `install.sh`
+replaces `/usr/local/bin/retroarch` (and `retroarch32`) with `gs-shim.sh`,
+preserving the real wrapper at `/opt/gameswitcher/orig/<name>`. Because
+`gs-shim.sh` loops internally — quit one game, show the carousel, launch
+the next — ES never regains the screen mid-session; switching costs a game
+launch, not an ES restart. `gs-shim.sh` branches on `basename "$0"` to
+serve both `retroarch` and `retroarch32` under the one script.
+
+**Everything hangs off `gs-common.sh`.** Sourced by every other script
+(`GS_COMMON` env var lets tests override the path). Owns: path/env
+defaults, `gameswitcher.conf` sourcing, the recents store (TSV at
+`~/.config/gameswitcher/recents.tsv`), the session marker (`/dev/shm/gs_session`,
+what's currently playing — PID included), the switch marker
+(`/dev/shm/gs_switch`), the ES freeze/resume/watchdog trio, and
+`gs_log`/`gs_fix_perm`. Read its own comments before touching any of this —
+several functions exist specifically to route around a kernel/hardware
+quirk that isn't obvious from the code alone (see Hard-won invariants).
+
+**The three ways in:**
+- **Mid-game Fn tap or power-button short-press** → `gs-hotkeyd.py` (a
+  per-game watcher `gs-shim.sh` starts/stops for the life of a session,
+  matching by evdev capability rather than device name) or `pause.sh.gs`
+  (only installed if `GS_TRIGGER` includes `power`) → `gs-suspend.sh`
+  (screenshots the live frame over RetroArch's network-command port,
+  converts it to BMP via `ffmpeg`, sends `QUIT` twice, escalates to
+  `SIGTERM` after `GS_QUIT_TIMEOUT` — always against the tracked PID, never
+  by name) → back into `gs-shim.sh`'s loop, which shows the carousel
+  (`gameswitcher.c`, SDL2, falls back to `gs-menu.sh`'s `dialog` UI if the
+  carousel can't be built/fails to start) and launches whatever was picked.
+- **`Options > Game Switcher`** (`Game Switcher.sh`) — opens the carousel
+  directly from EmulationStation's own menu so recent games are reachable
+  after a reboot, not just mid-session. Picking a game hands off to
+  `/usr/local/bin/<emulator>` (the shim) exactly as a fresh ES-initiated
+  launch would.
+- **`Options > Advanced`** — `Game Switcher Button.sh` relearns the hotkey
+  (`gs-hotkeyd.py --learn`), `Game Switcher Diagnostics.sh` shows a
+  filtered summary of `gs-doctor.sh`'s full report.
+
+**Settings** (`config/gameswitcher.conf`, shipped once, never overwritten
+by a reinstall): `GS_TRIGGER` (`fn`/`power`/`both`), `GS_HOTKEY_CODE`/`GS_HOTKEY_DEVICE`,
+`GS_SHOW_SPLASH`, `GS_QUIT_TIMEOUT`, `GS_SHOT_TIMEOUT`, `GS_MAX_RECENTS`,
+`GS_RA_PORT`, `GS_DEBUG` (timestamped log to `~/.config/gameswitcher/gameswitcher.log`).
+
+## Hard-won invariants (don't relitigate these)
+
+- **Never match RetroArch by name.** `gs-shim.sh` is installed as the file
+  `retroarch`/`retroarch32` and directly exec'd by path, so the kernel gives
+  its own process the *same `comm`* as the real RetroArch binary it forks
+  and waits on (confirmed empirically, `TASK_COMM_LEN` truncation makes it
+  worse for `emulationstation` too — 16 chars, one over the 15-char
+  `/proc/PID/comm` limit). Any `pgrep -x`/`pkill -x` by name can hit either
+  process. Everything here signals by tracked PID (`GS_S_PID` in the
+  session file) or matches full cmdline with `pgrep -f`, never a bare name.
+  A previous version's name-based kill in `gs-suspend.sh`'s escalation was
+  killing `gs-shim.sh` itself — that was the actual cause of "EmulationStation
+  flickers when switching," not anything ES was doing.
+- **`gs_es_freeze`/`gs_es_resume` (SIGSTOP/SIGCONT on ES's real binary, not
+  its systemd-tracked wrapper PID) only pauses ES's scheduling — it cannot
+  make ES release its DRM master or GL context.** That release only happens
+  inside EmulationStation-fcamod's own code (`Window::deinit(true)`,
+  called by both `FileData::launchGame` and `GuiTools::launchTool` before
+  every `system()` call it makes, `init(true)` after). Freezing ES is a
+  correct, working defensive net for the mid-game switch loop (`gs-shim.sh`),
+  where ES is separately guaranteed already-blocked in its own `system()`
+  call regardless of the freeze. It is **not** a substitute for that deinit
+  for anything reached outside ES's own call path — see the idle-Fn history
+  below before ever reintroducing something like it.
+- **`gs-hotkeyd.py` never grabs its input devices** (`EVIOCGRAB`) — a
+  grabbed device would stop the game itself (or ES) from seeing the same
+  input. It matches whichever device reports the target evdev code in its
+  capabilities rather than a fixed device name, so a wrong `GS_HOTKEY_DEVICE`
+  only narrows the search instead of breaking detection outright.
+- A game process exiting doesn't mean its GPU/DRM context has finished
+  tearing down — `gs_wait_for_teardown` gives it a brief, bounded window
+  before the switcher contends for the display.
+
+## Significant history (what was tried and reverted, and why)
+
+Roughly chronological; read this before proposing something that sounds
+like it should obviously work — several plausible-looking approaches here
+were already tried and specifically disproved on real hardware.
+
+1. **PID-tracking fix.** `gs-suspend.sh`'s escalation and `gs_ra_running`
+   originally matched RetroArch by name. Fixed by writing the real game's
+   PID into the session file at launch and always signaling/checking that
+   PID directly — see "Hard-won invariants" above.
+2. **ES freeze/resume/watchdog**, gated behind a `GS_ES_FREEZE` setting
+   (default off), added as a safety net for the mid-game switch loop. Later
+   made **unconditional** and the setting removed outright, per explicit
+   user direction ("cleaner code, save a few if checks") once it was clear
+   there was no real use case for leaving it off.
+3. **A system-wide idle-in-ES Fn shortcut** (`gs-hotkeyd-idle.service`, a
+   persistent systemd unit separate from the per-game watcher) was added so
+   the carousel could open from EmulationStation's own idle menus, not just
+   mid-game or via Options. It was **fully removed** after several rounds of
+   chasing a real bug: picking a game from that idle carousel reliably
+   segfaulted RetroArch. Root cause, confirmed by reading
+   EmulationStation-fcamod's own source (`es-app/src/FileData.cpp`,
+   `es-app/src/guis/GuiTools.cpp`) and a `dmesg` capture showing a kernel-side
+   DRM modeset (`vop_crtc_enable`) landing at the exact moment of the crash:
+   ES only releases its renderer/DRM context cleanly on its *own* launch
+   code path (`Window::deinit(true)` before `system()`), which the idle path
+   — running independently of ES via a separate systemd service — could
+   never trigger. `SIGSTOP` freezing ES from outside cannot substitute for
+   that deinit. A real fix would need either synthetic-input menu
+   navigation (rejected: fragile, depends on the live sort position of every
+   installed Options-menu script/folder) or patching and rebuilding
+   EmulationStation-fcamod itself to add an external trigger for
+   `GuiTools::launchTool()`'s exact sequence (rejected as out of scope for
+   a drop-in addon). The Fn shortcut now only works mid-game; the carousel
+   is otherwise only reachable via `Options > Game Switcher`, which was
+   never actually broken (it already goes through ES's own `launchTool()`).
+   `install.sh` unconditionally cleans up any leftover `gs-hotkeyd-idle.service`
+   from an install predating this reversion.
+4. **Launch-failure diagnostics** added to `gs-shim.sh` while chasing the
+   above (capture `orig`'s stdout/stderr, log its exit code and elapsed
+   time) were kept after the revert — generically useful for diagnosing any
+   future launch failure, not tied to the removed feature. A crash-retry
+   loop added alongside them (retry once on a fault-signal exit) was
+   removed with the rest of the idle-path machinery once it was clear the
+   retry never helped a genuine DRM-handover collision.
+
+## Known stale code
+
+`scripts/Game Switcher Setup.sh` is a leftover from the very first commit's
+design (an on/off toggle reading a `/opt/gameswitcher/payload` directory,
+mirroring how dArkOS's own Quick Mode ships inactive-until-enabled). It was
+superseded almost immediately by the current direct `install.sh`/`uninstall.sh`
+model and has never been wired into anything since — `install.sh` doesn't
+copy it, the Makefile's `package` target doesn't ship it under
+`/opt/system/Advanced`, nothing references `PAYLOAD`. It's untracked dead
+weight, not a hidden feature; don't assume it does anything on-device.
