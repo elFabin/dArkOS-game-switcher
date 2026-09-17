@@ -8,11 +8,25 @@ This directory (`gameswitcher/`) is a self-contained addon inside a much
 larger checkout of the dArkOS handheld-emulation OS build system (the repo
 root has `build_*.sh` scripts for dozens of unrelated emulators/tools). The
 git remote (`elFabin/dArkOS-game-switcher`) and every commit that matters
-here touch only this directory — treat `gameswitcher/` as the project root
-for all practical purposes. It ships as a drop-in: unzipped into
-`/roms/tools` on a real device and installed via `install.sh`, which patches
-the live system (RetroArch config, `/usr/local/bin/retroarch{,32}`,
-`/opt/system/` menu entries, optionally `pause.sh`).
+here touch only this directory plus one top-level integration script,
+`build_gameswitcher.sh` — treat `gameswitcher/` as the project root for all
+practical purposes, but check that top-level script too whenever files move.
+
+It ships two ways:
+- **Baked into the OS image**: `build_gameswitcher.sh` (repo root, sourced
+  during the image build, after `finishing_touches.sh` and before
+  `cleanup_filesystem.sh` strips the SDL2 headers) copies the payload to
+  `/opt/gameswitcher/` and drops `Game Switcher Setup.sh` into
+  `/opt/system/Advanced/`. Ships inactive, like dArkOS's own Quick Mode —
+  nothing is hooked until the player runs that entry.
+- **As a drop-in**: `make package` produces `dist/GameSwitcher.zip`,
+  unzipped into `/roms/tools` and installed the same way.
+
+Either way, **`Game Switcher Setup.sh`** (project root) is the actual
+entry point end users hit — it's a toggle: `grep -q gs-shim
+/usr/local/bin/retroarch` decides whether to `exec` `gs-install.sh` or
+`gs-uninstall.sh`, found under `/opt/gameswitcher/scripts` if the image-baked
+copy exists, else `/roms/tools/GameSwitcher/scripts` for a manual drop-in.
 
 Target hardware is an **A10 Mini** (RK3326, 640x480, dArkOS/EmulationStation-fcamod).
 There is no way to reach real hardware from a dev/build host — every fix in
@@ -38,7 +52,7 @@ Running a single test file directly (each takes the project root as `$1`
 and is independently useful while iterating):
 ```sh
 ./test/shim_case.sh "$(pwd)"       # gs-shim.sh's switch loop, ES freeze, escalation safety
-./test/install_case.sh "$(pwd)"    # install.sh/uninstall.sh round-trip on a --root staging tree
+./test/install_case.sh "$(pwd)"    # scripts/gs-install.sh / gs-uninstall.sh round-trip on a --root staging tree
 ./test/hotkey_case.sh "$(pwd)"     # gs-hotkeyd.py's TapDetector state machine
 ```
 All of it runs against stubs (`sudo`, `systemctl`, `pgrep`, RetroArch itself)
@@ -54,7 +68,7 @@ gnu-sed` and prepend their `libexec/gnubin` to `PATH` for `make check`.
 
 **The core trick.** dArkOS/EmulationStation launches a game with one shell
 command it blocks on: `sudo perfmax %GOVERNOR% %ROM%; nice -n -19
-/usr/local/bin/retroarch -L <core> %ROM%; sudo perfnorm`. `install.sh`
+/usr/local/bin/retroarch -L <core> %ROM%; sudo perfnorm`. `gs-install.sh`
 replaces `/usr/local/bin/retroarch` (and `retroarch32`) with `gs-shim.sh`,
 preserving the real wrapper at `/opt/gameswitcher/orig/<name>`. Because
 `gs-shim.sh` loops internally — quit one game, show the carousel, launch
@@ -62,15 +76,14 @@ the next — ES never regains the screen mid-session; switching costs a game
 launch, not an ES restart. `gs-shim.sh` branches on `basename "$0"` to
 serve both `retroarch` and `retroarch32` under the one script.
 
-**Everything hangs off `gs-common.sh`.** Sourced by every other script
-(`GS_COMMON` env var lets tests override the path). Owns: path/env
-defaults, `gameswitcher.conf` sourcing, the recents store (TSV at
-`~/.config/gameswitcher/recents.tsv`), the session marker (`/dev/shm/gs_session`,
-what's currently playing — PID included), the switch marker
-(`/dev/shm/gs_switch`), the ES freeze/resume/watchdog trio, and
-`gs_log`/`gs_fix_perm`. Read its own comments before touching any of this —
-several functions exist specifically to route around a kernel/hardware
-quirk that isn't obvious from the code alone (see Hard-won invariants).
+**Everything hangs off `scripts/gs-common.sh`.** Sourced by every other
+script (`GS_COMMON` env var lets tests override the path). Owns:
+path/env defaults, `gameswitcher.conf` sourcing, the recents store (TSV at
+`~/.config/gameswitcher/recents.tsv` — added-to and removed-from only;
+there is no seeding from RetroArch's own history anymore, see History),
+the session marker (`/dev/shm/gs_session`, what's currently playing — PID
+included), the switch marker (`/dev/shm/gs_switch`), the ES
+freeze/resume/watchdog trio, and `gs_log`/`gs_fix_perm`.
 
 **The three ways in:**
 - **Mid-game Fn tap or power-button short-press** → `gs-hotkeyd.py` (a
@@ -81,16 +94,18 @@ quirk that isn't obvious from the code alone (see Hard-won invariants).
   converts it to BMP via `ffmpeg`, sends `QUIT` twice, escalates to
   `SIGTERM` after `GS_QUIT_TIMEOUT` — always against the tracked PID, never
   by name) → back into `gs-shim.sh`'s loop, which shows the carousel
-  (`gameswitcher.c`, SDL2, falls back to `gs-menu.sh`'s `dialog` UI if the
-  carousel can't be built/fails to start) and launches whatever was picked.
-- **`Options > Game Switcher`** (`Game Switcher.sh`) — opens the carousel
-  directly from EmulationStation's own menu so recent games are reachable
-  after a reboot, not just mid-session. Picking a game hands off to
-  `/usr/local/bin/<emulator>` (the shim) exactly as a fresh ES-initiated
-  launch would.
-- **`Options > Advanced`** — `Game Switcher Button.sh` relearns the hotkey
-  (`gs-hotkeyd.py --learn`), `Game Switcher Diagnostics.sh` shows a
-  filtered summary of `gs-doctor.sh`'s full report.
+  (`src/gameswitcher.c`, SDL2, falls back to `gs-menu.sh`'s `dialog` UI if
+  the carousel can't be built/fails to start) and launches whatever was
+  picked.
+- **`Options > Game Switcher`** (`Game Switcher.sh`, project root) — opens
+  the carousel directly from EmulationStation's own menu so recent games
+  are reachable after a reboot, not just mid-session. Picking a game hands
+  off to `/usr/local/bin/<emulator>` (the shim) exactly as a fresh
+  ES-initiated launch would.
+- **`Options > Advanced`** — `Game Switcher Setup.sh` (install/uninstall
+  toggle), `Game Switcher Button.sh` (relearns the hotkey via
+  `gs-hotkeyd.py --learn`), `Game Switcher Diagnostics.sh` (filtered
+  summary of `gs-doctor.sh`'s full report).
 
 **Settings** (`config/gameswitcher.conf`, shipped once, never overwritten
 by a reinstall): `GS_TRIGGER` (`fn`/`power`/`both`), `GS_HOTKEY_CODE`/`GS_HOTKEY_DEVICE`,
@@ -166,8 +181,8 @@ were already tried and specifically disproved on real hardware.
    a drop-in addon). The Fn shortcut now only works mid-game; the carousel
    is otherwise only reachable via `Options > Game Switcher`, which was
    never actually broken (it already goes through ES's own `launchTool()`).
-   `install.sh` unconditionally cleans up any leftover `gs-hotkeyd-idle.service`
-   from an install predating this reversion.
+   `gs-install.sh` unconditionally cleans up any leftover
+   `gs-hotkeyd-idle.service` from an install predating this reversion.
 4. **Launch-failure diagnostics** added to `gs-shim.sh` while chasing the
    above (capture `orig`'s stdout/stderr, log its exit code and elapsed
    time) were kept after the revert — generically useful for diagnosing any
@@ -175,14 +190,26 @@ were already tried and specifically disproved on real hardware.
    loop added alongside them (retry once on a fault-signal exit) was
    removed with the rest of the idle-path machinery once it was clear the
    retry never helped a genuine DRM-handover collision.
-
-## Known stale code
-
-`scripts/Game Switcher Setup.sh` is a leftover from the very first commit's
-design (an on/off toggle reading a `/opt/gameswitcher/payload` directory,
-mirroring how dArkOS's own Quick Mode ships inactive-until-enabled). It was
-superseded almost immediately by the current direct `install.sh`/`uninstall.sh`
-model and has never been wired into anything since — `install.sh` doesn't
-copy it, the Makefile's `package` target doesn't ship it under
-`/opt/system/Advanced`, nothing references `PAYLOAD`. It's untracked dead
-weight, not a hidden feature; don't assume it does anything on-device.
+5. **Layout restructure** (done directly on the device/by hand, outside
+   this session): `install.sh`/`uninstall.sh` moved into `scripts/` as
+   `gs-install.sh`/`gs-uninstall.sh`; `Game Switcher.sh`, `Game Switcher
+   Button.sh`, and `Game Switcher Diagnostics.sh` moved *out* of `scripts/`
+   to the project root, next to the pre-existing `Game Switcher Setup.sh`,
+   which is now the real, wired-in install/uninstall toggle shipped to
+   `/opt/system/Advanced/`. The RetroArch-history "seeding" feature
+   (`gs_recents_seed`, populating an empty recents list on first install)
+   was removed entirely, along with its tests. `video_gpu_screenshot`'s
+   install-time default flipped from `"false"` to `"true"` (GPU capture
+   instead of the core framebuffer, so shaders/overlays show up in
+   thumbnails too). The restructure briefly left a few cross-file
+   inconsistencies that have since been fixed (`build_gameswitcher.sh`
+   copying from the old pre-move paths; `Game Switcher Setup.sh` checking
+   for a `/opt/gameswitcher/payload` directory nothing ever creates instead
+   of `/opt/gameswitcher` itself; a stray debug `echo`/top-level `return 0`
+   left in `gs-install.sh`; `gs-doctor.sh`'s debug-log check testing
+   `[ -n "${GS_DEBUG}" ]`, always true since it defaults to `"0"`, instead
+   of `[ "${GS_DEBUG}" = "1" ]`) — all confirmed fixed as of the current
+   tree; worth a rebuild + `make check` after any future path-shuffling to
+   catch the same class of gap early (`make check` only exercises files
+   under `gameswitcher/`, not `build_gameswitcher.sh` at the repo root, so
+   that one needs eyeballing by hand after any move).
