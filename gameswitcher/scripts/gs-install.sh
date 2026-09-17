@@ -1,19 +1,21 @@
 #!/bin/bash
 #############################################################################
-# install.sh - install the dArkOS Game Switcher onto a running device.
+# gs-install.sh - install the dArkOS Game Switcher onto a running device.
 #
-# Everything it touches is backed up first, so uninstall.sh puts the system
+# Everything it touches is backed up first, so gs-uninstall.sh puts the system
 # back exactly as it found it.  Nothing in the OS image is modified at build
 # time; this is purely a runtime install.
 #
-# Usage:  ./install.sh [--yes] [--root DIR]
+# Usage:  ./gs-install.sh [--yes] [--root DIR]
 #           --yes    skip the A/B confirmation (for scripted installs and tests)
 #           --root   install into a staging tree instead of / (used by tests)
 #############################################################################
 
 set -u
 
-GS_SRC="$(cd "$(dirname "$0")" && pwd)"
+GS_SRC="$(cd "$(dirname "$(dirname "$0")")" && pwd)"
+echo "Game Switcher source: ${GS_SRC}"
+return 0;
 
 ASSUME_YES=""
 ROOT=""
@@ -134,10 +136,9 @@ patch_retroarch() {
       # where we never look, and where ES would scrape it as a PICO-8 cart,
       # since .png is a real ROM extension for the fake08 core.
       set_cfg "${cfg}" screenshots_in_content_dir "false"
-      # Take the shot from the core's framebuffer rather than glReadPixels on
-      # the Mali blob: more reliable, and a cleaner thumbnail with no shaders
-      # or overlays baked in.
-      set_cfg "${cfg}" video_gpu_screenshot "false"
+      # Take the shot using the GPU, so the final result is what the player actually
+      # sees.
+      set_cfg "${cfg}" video_gpu_screenshot "true"
     done
   done
 }
@@ -197,7 +198,7 @@ sync_pause_hook() {
 # fix (ES only releases its renderer cleanly on its own launch code path --
 # see Game Switcher.sh's header comment) and was dropped.  Clean up any
 # leftover install from an older version unconditionally, regardless of
-# GS_TRIGGER, the same way uninstall.sh already does.
+# GS_TRIGGER, the same way gs-uninstall.sh already does.
 cleanup_idle_hotkey() {
   if [ -e "${IDLE_UNIT}" ]; then
     [ -z "${ROOT}" ] && ${SUDO} systemctl disable --now gs-hotkeyd-idle >/dev/null 2>&1
@@ -228,9 +229,9 @@ install_scripts() {
     ${SUDO} cp "${GS_SRC}/scripts/gs-shim.sh" "${BIN}/${emulator}"
   done
 
-  ${SUDO} cp "${GS_SRC}/scripts/Game Switcher.sh" "${SYSMENU}/Game Switcher.sh"
-  ${SUDO} cp "${GS_SRC}/scripts/Game Switcher Button.sh" "${SYSADV}/Game Switcher Button.sh"
-  ${SUDO} cp "${GS_SRC}/scripts/Game Switcher Diagnostics.sh" "${SYSADV}/Game Switcher Diagnostics.sh"
+  ${SUDO} cp "${GS_SRC}/Game Switcher.sh" "${SYSMENU}/Game Switcher.sh"
+  ${SUDO} cp "${GS_SRC}/Game Switcher Button.sh" "${SYSADV}/Game Switcher Button.sh"
+  ${SUDO} cp "${GS_SRC}/Game Switcher Diagnostics.sh" "${SYSADV}/Game Switcher Diagnostics.sh"
 
   # Ship the tunables as a commented file, but never clobber an edited one.
   if [ ! -f "${CONF}" ] && [ -f "${GS_SRC}/config/gameswitcher.conf" ]; then
@@ -335,11 +336,9 @@ install_scripts
 patch_retroarch
 install_ui
 
-# Give the carousel something to show before the first suspend.
 if [ -z "${ROOT}" ]; then
   # shellcheck disable=SC1091
   . "${BIN}/gs-common.sh"
-  gs_recents_seed
   check_ffmpeg
 fi
 

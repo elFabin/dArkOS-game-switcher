@@ -8,10 +8,17 @@
 # one entry offers whichever action applies.
 #############################################################################
 
-PAYLOAD="/opt/gameswitcher/payload"
-
-if [ -e /usr/local/bin/gs-common.sh ] && grep -q 'gs-shim' /usr/local/bin/retroarch 2>/dev/null; then
-  exec "${PAYLOAD}/uninstall.sh"
+if [ -d "/opt/gameswitcher/payload" ]; then
+  PAYLOAD="/opt/gameswitcher/scripts"
+else
+  # Fall back to gs-install.sh from scripts directory
+  PAYLOAD="/roms/tools/GameSwitcher/scripts"
 fi
 
-exec "${PAYLOAD}/install.sh"
+
+if [ -e /usr/local/bin/gs-common.sh ] && grep -q 'gs-shim' /usr/local/bin/retroarch 2>/dev/null; then
+  echo "Game Switcher is already installed.  Uninstalling..."
+  exec "${PAYLOAD}/gs-uninstall.sh"
+fi
+
+exec "${PAYLOAD}/gs-install.sh"

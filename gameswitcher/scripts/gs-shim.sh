@@ -70,9 +70,9 @@ gs_run_ui() {
 
 # ---------------------------------------------------------------------------
 # The Fn-tap watcher (GS_TRIGGER=fn|both).  Started once for the whole switch
-# session and stopped on every exit path, the same bracket ppsspp/ppsspp.sh
-# puts around watchpsp.sh.  It fires gs-suspend.sh itself; the shim only has
-# to keep it alive for exactly as long as a game might be running.
+# session and stopped on every exit path, It fires gs-suspend.sh itself; the 
+# shim only has to keep it alive for exactly as long as a game might be
+# running.
 # ---------------------------------------------------------------------------
 GS_HOTKEYD_PID=""
 

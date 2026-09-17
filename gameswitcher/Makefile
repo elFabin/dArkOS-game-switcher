@@ -43,12 +43,12 @@ package: clean
 	rm -rf dist
 	mkdir -p dist/GameSwitcher/scripts dist/GameSwitcher/src dist/GameSwitcher/tools \
 		dist/GameSwitcher/config
-	cp Makefile install.sh uninstall.sh README.md dist/GameSwitcher/
+	cp *.sh Makefile README.md dist/GameSwitcher/
 	cp scripts/* dist/GameSwitcher/scripts/
 	cp src/gameswitcher.c src/font.h dist/GameSwitcher/src/
 	cp tools/genfont.py dist/GameSwitcher/tools/
 	cp config/gameswitcher.conf dist/GameSwitcher/config/
-	printf '#!/bin/bash\nexec "$$(dirname "$$0")/GameSwitcher/install.sh"\n' \
+	printf '#!/bin/bash\nexec "$$(dirname "$$0")/GameSwitcher/Game Switcher Setup.sh"\n' \
 		> "dist/Install Game Switcher.sh"
 	chmod 777 "dist/Install Game Switcher.sh" dist/GameSwitcher/*.sh dist/GameSwitcher/scripts/*
 	cd dist && zip -qr GameSwitcher.zip "Install Game Switcher.sh" GameSwitcher
