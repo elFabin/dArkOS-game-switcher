@@ -122,7 +122,7 @@ else
 fi
 echo
 
-if [ -n "${GS_DEBUG}" ]; then
+if [ "${GS_DEBUG}" = "1" ]; then
   echo "-- Debug log --"
   echo "GS_DEBUG=1 is set in gameswitcher.conf, so debug logging is enabled."
   echo "-- Recent log (${GS_STATE}/gameswitcher.log) --"

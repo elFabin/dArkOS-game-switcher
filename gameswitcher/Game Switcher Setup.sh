@@ -8,7 +8,7 @@
 # one entry offers whichever action applies.
 #############################################################################
 
-if [ -d "/opt/gameswitcher/payload" ]; then
+if [ -d "/opt/gameswitcher" ]; then
   PAYLOAD="/opt/gameswitcher/scripts"
 else
   # Fall back to gs-install.sh from scripts directory
