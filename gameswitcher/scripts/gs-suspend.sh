@@ -45,30 +45,20 @@ gs_shot_dir() {
 # ---------------------------------------------------------------------------
 # Grab the frame the player is looking at, before anything quits.
 # ---------------------------------------------------------------------------
+# No ffmpeg here anymore -- gameswitcher.c now decodes PNG itself (src/png.h),
+# so the shot RetroArch already wrote just needs to be renamed into thumbs/.
+# shots/ and thumbs/ are siblings under the same GS_STATE, so this is a plain
+# rename on the same filesystem, not a copy -- nothing can observe a
+# half-written thumbnail. This also sidesteps a known rk3326 build gap where
+# ffmpeg is installed but can't load libvulkan.so.1 (see gs-doctor.sh's old
+# check), and drops the CPU rescale that duplicated work the carousel's own
+# fit_rect_in already does on the GPU at draw time.
 gs_capture_thumb() {
-  local dir marker shot ffmpeg_bin
+  local dir marker shot t0
   dir="$(gs_shot_dir)"
   gs_log "screenshot dir for ${GS_S_EMULATOR}: ${dir}"
   if [ ! -d "${dir}" ]; then
     gs_log "screenshot dir does not exist, skipping capture"
-    return 1
-  fi
-
-  # Prefer the confirmed on-device location over a bare PATH lookup: ffmpeg
-  # lands at /usr/bin/ffmpeg on every dArkOS build variant (a plain apt
-  # package on rk3326, a custom rockchip-mpp build installed to the same
-  # --prefix=/usr on rk3566).  `command -v ffmpeg` has been observed to
-  # succeed while a later bare `ffmpeg` call in the very same script run
-  # still failed with "not found" (exit 127) -- nothing in the OS build
-  # (systemd unit, sudoers, profile scripts) explains that discrepancy, so
-  # this at least removes PATH resolution as a variable for the common case.
-  if [ -x /usr/bin/ffmpeg ]; then
-    ffmpeg_bin=/usr/bin/ffmpeg
-  else
-    ffmpeg_bin="$(command -v ffmpeg 2>/dev/null)"
-  fi
-  if [ -z "${ffmpeg_bin}" ]; then
-    gs_log "ffmpeg not found (checked /usr/bin/ffmpeg and PATH=${PATH})"
     return 1
   fi
 
@@ -77,6 +67,7 @@ gs_capture_thumb() {
   : > "${marker}" 2>/dev/null || return 1
 
   gs_log "sending SCREENSHOT to 127.0.0.1:${GS_RA_PORT}"
+  t0=$(gs_now_ms)
   gs_ra_cmd SCREENSHOT
 
   waited=0
@@ -88,33 +79,19 @@ gs_capture_thumb() {
     waited=$(( waited + 1 ))
   done
   rm -f "${marker}" 2>/dev/null
+  gs_phase "shot-request->png" "${t0}"
   if [ -z "${shot}" ]; then
     gs_log "no new screenshot appeared in ${dir} within ${GS_SHOT_TIMEOUT}s"
     return 1
   fi
-  gs_log "captured ${shot}, converting to BMP with ${ffmpeg_bin}"
 
-  # The carousel reads BMP: SDL2_image's headers are stripped from the device
-  # by cleanup_filesystem.sh, so the UI links against core SDL2 only.
-  # -loglevel error (not quiet) plus capturing output means an actual failure
-  # logs ffmpeg's own message instead of a bare, ambiguous exit code.
-  #
-  # Scaled to the device's own display resolution, not a fixed low size: the
-  # carousel now shows this full-screen (gameswitcher.c fits it to the screen
-  # preserving aspect ratio at draw time), so capturing at native resolution
-  # avoids downscaling then blowing it back up again for display.
-  local ff_err rc size
-  size="$(gs_display_size)"
-  ff_err="$("${ffmpeg_bin}" -y -loglevel error -i "${shot}" \
-    -vf "scale=${size}:force_original_aspect_ratio=decrease,pad=${size}:(ow-iw)/2:(oh-ih)/2" \
-    -pix_fmt bgr24 "${GS_THUMBS}/${GS_S_KEY}.bmp" 2>&1)"
-  rc=$?
-  rm -f "${shot}" 2>/dev/null
-  if [ "${rc}" -ne 0 ]; then
-    gs_log "ffmpeg conversion failed with exit ${rc}: ${ff_err}"
+  mv -f "${shot}" "${GS_THUMBS}/${GS_S_KEY}.png" 2>/dev/null
+  if [ ! -e "${GS_THUMBS}/${GS_S_KEY}.png" ]; then
+    gs_log "moving ${shot} into thumbs/ failed"
+    rm -f "${shot}" 2>/dev/null
     return 1
   fi
-  gs_fix_perm "${GS_THUMBS}/${GS_S_KEY}.bmp"
+  gs_fix_perm "${GS_THUMBS}/${GS_S_KEY}.png"
 }
 
 gs_capture_thumb || gs_log "no thumbnail captured for ${GS_S_ROM}"
@@ -125,8 +102,14 @@ gs_capture_thumb || gs_log "no thumbnail captured for ${GS_S_ROM}"
 gs_fix_perm "${GS_SWITCH}"
 
 # Two QUITs is what Quick Mode sends; RetroArch's quit_press_twice is on.
+# The gap between them used to just be however long `nc -u -w1` took to give
+# up (~1s, since gs_ra_cmd now delivers over /dev/udp with no such delay) --
+# a short explicit sleep keeps that same known-working spacing rather than
+# firing both in the same instant, with none of the wasted time.
+quit_t0=$(gs_now_ms)
 gs_log "quitting ${GS_S_EMULATOR} (${GS_S_ROM})"
 gs_ra_cmd QUIT
+sleep 0.15
 gs_ra_cmd QUIT
 
 waited=0
@@ -135,6 +118,7 @@ while kill -0 "${GS_S_PID}" 2>/dev/null; do
   sleep 0.1
   waited=$(( waited + 1 ))
 done
+gs_phase "quit->exit" "${quit_t0}"
 
 # It ignored us.  Take the game down anyway - but only after the grace period
 # above, so a slow autosave on a big core is never cut short.  Kill the

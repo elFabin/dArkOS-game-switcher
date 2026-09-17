@@ -38,6 +38,10 @@ GS_RA_PORT="${GS_RA_PORT:-55355}"
 GS_SHOW_SPLASH="${GS_SHOW_SPLASH:-0}"
 GS_QUIT_TIMEOUT="${GS_QUIT_TIMEOUT:-10}"
 GS_SHOT_TIMEOUT="${GS_SHOT_TIMEOUT:-5}"
+# How long gs_wait_for_teardown gives a just-exited RetroArch's GPU/DRM
+# context to settle before the switcher contends for the display.  See that
+# function's own comment for why this replaced a polling loop.
+GS_TEARDOWN_MS="${GS_TEARDOWN_MS:-400}"
 
 # fn | power | both.  Fn is BTN_TRIGGER_HAPPY5 (evdev 708) on the A10 Mini --
 # Blank GS_HOTKEY_DEVICE matchesby capability (any device that can emit the
@@ -94,6 +98,24 @@ gs_fix_perm() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Timing, for GS_DEBUG=1.  Fork-free (no `date`/`bc` subshell per call) so
+# instrumenting the switch path doesn't itself become part of what it's
+# measuring.  EPOCHREALTIME is a bash 5 builtin, "seconds.microseconds";
+# some locales render it with a comma, so that's normalized before the
+# arithmetic expansion touches it.
+# ---------------------------------------------------------------------------
+gs_now_ms() {
+  local t="${EPOCHREALTIME/,/.}"
+  printf '%s' $(( ${t%.*} * 1000 + 10#${t#*.} / 1000 ))
+}
+
+# gs_phase LABEL START_MS - logs how long has elapsed since START_MS under
+# that label.  Callers get the start with `start=$(gs_now_ms)`.
+gs_phase() {
+  gs_log "phase $1 $(( $(gs_now_ms) - $2 ))ms"
+}
+
 gs_init_dirs() {
   local d
   for d in "${GS_STATE}" "${GS_THUMBS}" "${GS_SHOTS}"; do
@@ -128,48 +150,52 @@ gs_system() {
   fi
 }
 
-# The device's actual display resolution, as "WIDTH:HEIGHT" (ffmpeg's own
-# separator, so callers can drop this straight into a -vf filter).
-# /sys/class/graphics/fb0/virtual_size is standard Linux fbdev sysfs,
-# documented as "W,H"; fall back to the A10 Mini's own 640x480 if it's
-# missing or in an unexpected format rather than guessing further.
-gs_display_size() {
-  local raw
-  if [ -r /sys/class/graphics/fb0/virtual_size ]; then
-    raw="$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null)"
-    case "${raw}" in
-      [0-9]*,[0-9]*) printf '%s:%s' "${raw%,*}" "${raw#*,}"; return 0 ;;
-    esac
-  fi
-  printf '640:480'
-}
-
 # ---------------------------------------------------------------------------
 # Talking to a live RetroArch
 # ---------------------------------------------------------------------------
 
 # Send a RetroArch network command.  We deliberately do NOT shell out to
 # `retroarch --command`: /usr/local/bin/retroarch is our own shim, so that
-# would recurse.  netcat-openbsd is in needed_packages.txt.
+# would recurse.
+#
+# bash's own /dev/udp redirection is preferred over `nc -u -w1`: that -w1
+# only returns instantly when nothing is listening on the port (the kernel
+# answers with ICMP port-unreachable) -- against a live RetroArch it blocks
+# for the FULL second every time (measured directly: 1.004s per call), and
+# this fires up to three times per switch.  /dev/udp delivers the identical
+# datagram with no fork and no wait.  Kept as a fallback for a bash built
+# without net redirections (--enable-net-redirections is not universal);
+# netcat-openbsd is in needed_packages.txt for exactly that case.
 gs_ra_cmd() {
-  printf '%s\n' "$1" | nc -u -w1 127.0.0.1 "${GS_RA_PORT}" >/dev/null 2>&1
+  printf '%s\n' "$1" > "/dev/udp/127.0.0.1/${GS_RA_PORT}" 2>/dev/null \
+    || printf '%s\n' "$1" | nc -u -w1 127.0.0.1 "${GS_RA_PORT}" >/dev/null 2>&1
 }
 
+# True if a shim SESSION is up -- NOT whether the game process itself is
+# alive.  gs-shim.sh is installed as the file "retroarch"/"retroarch32" and
+# directly exec'd by path, so the kernel gives its own process the same comm
+# as the real RetroArch binary it forks and waits on (see "Never match
+# RetroArch by name" in CLAUDE.md).  This is exactly right for pause.sh.gs
+# and gs-doctor.sh, which run OUTSIDE the shim and want to know "is a switch
+# session active at all" -- but it must never be called from INSIDE
+# gs-shim.sh, where it would always see itself and never go false.
 gs_ra_running() {
   pgrep -x retroarch >/dev/null 2>&1 || pgrep -x retroarch32 >/dev/null 2>&1
 }
 
 # A game's process exiting doesn't necessarily mean its GPU/DRM context has
 # finished tearing down (amiberry/amiberry.sh documents exactly this kind of
-# lag for EmulationStation's own handover).  Give it a brief, bounded window
-# to settle before the switcher contends for the display.
+# lag for EmulationStation's own handover).  Give it a brief, fixed window to
+# settle before the switcher contends for the display.
+#
+# This used to poll gs_ra_running for up to 2s instead of sleeping a fixed
+# amount -- but gs-shim.sh IS "retroarch"/"retroarch32" by comm (see
+# gs_ra_running above), so that loop always saw itself as "still running"
+# and burned its full 2s cap on every single switch.  By the time this runs,
+# gs-shim.sh has already `wait`ed on the actual game's PID, so there is
+# nothing left to poll for -- only a fixed settle makes sense here.
 gs_wait_for_teardown() {
-  local waited=0
-  while gs_ra_running; do
-    [ "${waited}" -ge 20 ] && break
-    sleep 0.1
-    waited=$(( waited + 1 ))
-  done
+  sleep "$(( GS_TEARDOWN_MS / 1000 )).$(printf '%03d' "$(( GS_TEARDOWN_MS % 1000 ))")"
 }
 
 # ---------------------------------------------------------------------------
@@ -192,8 +218,20 @@ gs_wait_for_teardown() {
 # off, and never triggers systemd's Restart=on-failure.
 # ---------------------------------------------------------------------------
 
+# Memoized per process: gs-shim.sh's startup self-heal (gs_es_resume) is
+# immediately followed by its own freeze (gs_es_freeze), which would
+# otherwise pay for the systemctl+pgrep lookup twice in a row for a PID that
+# cannot have changed in between. Only a successful resolution is cached --
+# a failure isn't, so a transient lookup miss doesn't wrongly stick for the
+# rest of this process's life.
+GS_ES_PID_CACHE=""
+
 gs_es_pid() {
   local wrapper_pid pid
+  if [ -n "${GS_ES_PID_CACHE}" ] && kill -0 "${GS_ES_PID_CACHE}" 2>/dev/null; then
+    printf '%s' "${GS_ES_PID_CACHE}"
+    return 0
+  fi
   wrapper_pid="$(systemctl show -p MainPID --value emulationstation.service 2>/dev/null)"
   if [ -z "${wrapper_pid}" ] || [ "${wrapper_pid}" = "0" ]; then
     gs_log "gs_es_pid: could not resolve emulationstation.service's MainPID"
@@ -205,6 +243,7 @@ gs_es_pid() {
     return 1
   fi
   gs_log "gs_es_pid: wrapper=${wrapper_pid} real=${pid}"
+  GS_ES_PID_CACHE="${pid}"
   printf '%s' "${pid}"
 }
 

@@ -15,6 +15,7 @@ call_chroot "mkdir -p /opt/gameswitcher/scripts /opt/gameswitcher/src /opt/games
 
 sudo cp gameswitcher/src/gameswitcher.c Arkbuild/opt/gameswitcher/src/
 sudo cp gameswitcher/src/font.h         Arkbuild/opt/gameswitcher/src/
+sudo cp gameswitcher/src/png.h          Arkbuild/opt/gameswitcher/src/
 sudo cp gameswitcher/Makefile           Arkbuild/opt/gameswitcher/
 sudo cp gameswitcher/scripts/gs-install.sh         Arkbuild/opt/gameswitcher/scripts/
 sudo cp gameswitcher/scripts/gs-uninstall.sh       Arkbuild/opt/gameswitcher/scripts/

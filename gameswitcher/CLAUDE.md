@@ -91,9 +91,11 @@ freeze/resume/watchdog trio, and `gs_log`/`gs_fix_perm`.
   matching by evdev capability rather than device name) or `pause.sh.gs`
   (only installed if `GS_TRIGGER` includes `power`) → `gs-suspend.sh`
   (screenshots the live frame over RetroArch's network-command port,
-  converts it to BMP via `ffmpeg`, sends `QUIT` twice, escalates to
-  `SIGTERM` after `GS_QUIT_TIMEOUT` — always against the tracked PID, never
-  by name) → back into `gs-shim.sh`'s loop, which shows the carousel
+  renames the PNG straight into `thumbs/` — no `ffmpeg` conversion step;
+  the carousel decodes PNG itself, see `src/png.h` — sends `QUIT` twice,
+  escalates to `SIGTERM` after `GS_QUIT_TIMEOUT` — always against the
+  tracked PID, never by name) → back into `gs-shim.sh`'s loop, which shows
+  the carousel
   (`src/gameswitcher.c`, SDL2, falls back to `gs-menu.sh`'s `dialog` UI if
   the carousel can't be built/fails to start) and launches whatever was
   picked.
@@ -110,7 +112,8 @@ freeze/resume/watchdog trio, and `gs_log`/`gs_fix_perm`.
 **Settings** (`config/gameswitcher.conf`, shipped once, never overwritten
 by a reinstall): `GS_TRIGGER` (`fn`/`power`/`both`), `GS_HOTKEY_CODE`/`GS_HOTKEY_DEVICE`,
 `GS_SHOW_SPLASH`, `GS_QUIT_TIMEOUT`, `GS_SHOT_TIMEOUT`, `GS_MAX_RECENTS`,
-`GS_RA_PORT`, `GS_DEBUG` (timestamped log to `~/.config/gameswitcher/gameswitcher.log`).
+`GS_RA_PORT`, `GS_TEARDOWN_MS`, `GS_DEBUG` (timestamped log to
+`~/.config/gameswitcher/gameswitcher.log`).
 
 ## Hard-won invariants (don't relitigate these)
 
@@ -142,8 +145,24 @@ by a reinstall): `GS_TRIGGER` (`fn`/`power`/`both`), `GS_HOTKEY_CODE`/`GS_HOTKEY
   capabilities rather than a fixed device name, so a wrong `GS_HOTKEY_DEVICE`
   only narrows the search instead of breaking detection outright.
 - A game process exiting doesn't mean its GPU/DRM context has finished
-  tearing down — `gs_wait_for_teardown` gives it a brief, bounded window
-  before the switcher contends for the display.
+  tearing down — `gs_wait_for_teardown` gives it a brief, fixed window
+  (`GS_TEARDOWN_MS`) before the switcher contends for the display. This
+  used to be a loop polling `gs_ra_running` for up to 2s instead of a fixed
+  sleep — but `gs_ra_running` is a name-based `pgrep -x retroarch`, and per
+  the invariant above, `gs-shim.sh` itself matches that name. Called from
+  *inside* the shim (which is exactly where this ran), the loop was seeing
+  itself and could never go false — every switch silently paid its full 2s
+  cap. `gs_ra_running` is still correct for callers outside the shim
+  (`pause.sh.gs`, `gs-doctor.sh`), where "a shim session is up" is exactly
+  what they want to know — just never call it from inside `gs-shim.sh`.
+- **`nc -u -w1` blocks for its full timeout against a port that's actually
+  listening** — it only returns instantly when nothing is listening (the
+  kernel answers with ICMP port-unreachable), which is exactly the case
+  off-device and exactly why this looked free in testing. Measured directly
+  against a real listener: 1.004s per call, and `gs_ra_cmd` used to fire it
+  up to three times per switch. `gs_ra_cmd` now writes to RetroArch's UDP
+  command port via bash's own `/dev/udp/…` redirection (no fork, no wait),
+  falling back to `nc` only if that's unavailable.
 
 ## Significant history (what was tried and reverted, and why)
 

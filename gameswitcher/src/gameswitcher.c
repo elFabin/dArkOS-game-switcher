@@ -33,6 +33,7 @@
 #include <time.h>
 
 #include "font.h"
+#include "png.h"
 
 #define MAX_ENTRIES 64
 #define MAX_PATH    1024
@@ -263,8 +264,16 @@ static SDL_Texture *thumb_for(SDL_Renderer *ren, Entry *e)
         return e->thumb;
     e->thumb_loaded = 1;
 
-    snprintf(path, sizeof(path), "%s/%s.bmp", g_thumbs, e->key);
-    surf = SDL_LoadBMP(path);
+    /* gs-suspend.sh writes PNG now (RetroArch's own screenshot format,
+     * renamed straight into thumbs/ with no conversion step). The .bmp
+     * fallback is for a thumbnail left behind by an older install, from
+     * back when ffmpeg did that conversion. */
+    snprintf(path, sizeof(path), "%s/%s.png", g_thumbs, e->key);
+    surf = gs_load_png(path);
+    if (!surf) {
+        snprintf(path, sizeof(path), "%s/%s.bmp", g_thumbs, e->key);
+        surf = SDL_LoadBMP(path);
+    }
     if (!surf)
         return NULL;
     e->thumb = SDL_CreateTextureFromSurface(ren, surf);
@@ -385,12 +394,20 @@ static void draw_frame(SDL_Renderer *ren, SDL_Texture *atlas,
         int left  = g_sel - 1;
         int right = g_sel + 1;
 
-        /* Furthest first, selected page on top -- same convention as before,
-         * just one full-screen "card" per game instead of three small ones. */
-        if (left >= 0)
+        /* Each hero is a full W-wide page at a multiple of W, so at anim==0
+         * (the resting state between moves) the left/right pages sit
+         * entirely off one edge or the other -- zero visible pixels. Skip
+         * them then rather than decoding a thumbnail nothing is going to
+         * show: this is what keeps the very first frame after the carousel
+         * starts (or after picking a game, which resets anim to 0) down to
+         * one thumbnail decode instead of three. The instant a move starts
+         * anim jumps straight to +/-1.0 before easing back (see the input
+         * handler below), so the neighbour that's about to become visible
+         * is already decoded on the same frame it first appears. */
+        if (left >= 0 && anim > 0.001f)
             draw_hero(ren, atlas, &g_entries[left],
                      (int)((-1.0f + anim) * (float)W), W, H);
-        if (right < g_count)
+        if (right < g_count && anim < -0.001f)
             draw_hero(ren, atlas, &g_entries[right],
                      (int)((1.0f + anim) * (float)W), W, H);
         draw_hero(ren, atlas, &g_entries[g_sel],
@@ -482,7 +499,8 @@ static void usage(void)
 {
     fprintf(stderr,
             "usage: gameswitcher [--state DIR] [--recents FILE] [--out FILE]\n"
-            "                    [--dump FILE.bmp] [--size WxH] [--select N]\n");
+            "                    [--dump FILE.bmp] [--size WxH] [--select N]\n"
+            "                    [--decode IN.png OUT.bmp]\n");
 }
 
 static int env_int_or(const char *name, int fallback)
@@ -499,6 +517,7 @@ static int env_int_or(const char *name, int fallback)
 int main(int argc, char **argv)
 {
     const char *dump = NULL;
+    const char *decode_in = NULL, *decode_out = NULL;
     int forced_w = 0, forced_h = 0;
     SDL_Window *win = NULL;
     SDL_Renderer *ren = NULL;
@@ -519,6 +538,10 @@ int main(int argc, char **argv)
             copy_field(g_out, sizeof(g_out), argv[++i]);
         else if (!strcmp(argv[i], "--dump") && i + 1 < argc)
             dump = argv[++i];
+        else if (!strcmp(argv[i], "--decode") && i + 2 < argc) {
+            decode_in = argv[++i];
+            decode_out = argv[++i];
+        }
         else if (!strcmp(argv[i], "--select") && i + 1 < argc)
             g_sel = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) {
@@ -531,6 +554,28 @@ int main(int argc, char **argv)
             usage();
             return 2;
         }
+    }
+
+    /* --decode is a standalone utility mode: run the PNG decoder on its own,
+     * no video driver needed at all (SDL_SaveBMP is plain surface I/O).
+     * This is what makes src/png.h testable off-device (test/png_case.sh),
+     * and it's a genuinely useful thing to have on the device itself when a
+     * thumbnail looks wrong. */
+    if (decode_in) {
+        SDL_Surface *surf = gs_load_png(decode_in);
+
+        if (!surf) {
+            fprintf(stderr, "gameswitcher: could not decode %s\n", decode_in);
+            return 1;
+        }
+        if (SDL_SaveBMP(surf, decode_out) != 0) {
+            fprintf(stderr, "gameswitcher: could not write %s: %s\n",
+                    decode_out, SDL_GetError());
+            SDL_FreeSurface(surf);
+            return 1;
+        }
+        SDL_FreeSurface(surf);
+        return 0;
     }
 
     if (g_recents[0] == '\0')
@@ -552,7 +597,11 @@ int main(int argc, char **argv)
             max_attempts = 1;
 
         for (attempt = 1; attempt <= max_attempts; attempt++) {
-            if (delay_ms > 0)
+            /* Only between attempts, never before the first: on the common
+             * happy path (DRM master already free) this used to pay a flat
+             * 500ms for nothing every single time. A real lost-DRM-master
+             * race still gets the same settle-then-retry spacing as before. */
+            if (attempt > 1 && delay_ms > 0)
                 SDL_Delay((Uint32)delay_ms);
 
             if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {

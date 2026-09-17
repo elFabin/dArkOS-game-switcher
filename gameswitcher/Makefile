@@ -18,11 +18,15 @@ endif
 
 CFLAGS  ?= -O2 -Wall -Wextra
 CFLAGS  += $(SDL_CFLAGS)
-LDLIBS  += $(SDL_LIBS) -lm
+# -ldl: src/png.h dlopen()s libz.so.1 at runtime rather than linking libz at
+# build time (zlib1g-dev is stripped from the device image -- see that
+# file's header comment). A no-op on glibc >= 2.34, where dlopen moved into
+# libc itself, but still needed for an older toolchain.
+LDLIBS  += $(SDL_LIBS) -lm -ldl
 
 BIN := gameswitcher
 SRC := src/gameswitcher.c
-HDR := src/font.h
+HDR := src/font.h src/png.h
 
 all: $(BIN)
 
@@ -45,7 +49,7 @@ package: clean
 		dist/GameSwitcher/config
 	cp *.sh Makefile README.md dist/GameSwitcher/
 	cp scripts/* dist/GameSwitcher/scripts/
-	cp src/gameswitcher.c src/font.h dist/GameSwitcher/src/
+	cp src/gameswitcher.c src/font.h src/png.h dist/GameSwitcher/src/
 	cp tools/genfont.py dist/GameSwitcher/tools/
 	cp config/gameswitcher.conf dist/GameSwitcher/config/
 	printf '#!/bin/bash\nexec "$$(dirname "$$0")/GameSwitcher/Game Switcher Setup.sh"\n' \

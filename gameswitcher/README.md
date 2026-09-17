@@ -26,7 +26,7 @@ games costs a game launch rather than an ES restart.
 ```
 Fn tap (clean, no combo) -> gs-hotkeyd.py -> gs-suspend.sh
                                                SCREENSHOT ---(udp 55355)--> RetroArch
-                                               thumbnail  ---(ffmpeg)-----> thumbs/<key>.bmp
+                                               thumbnail  ---(rename)-----> thumbs/<key>.png
                                                QUIT       ---(udp 55355)--> RetroArch
                                                                            (writes <rom>.state.auto)
 ES -> gs-shim -> [game] -> switch requested? -> carousel -> [next game] -> ...
@@ -143,6 +143,10 @@ below.
   own game-end hook restores.
 - **`GS_QUIT_TIMEOUT`**, **`GS_SHOT_TIMEOUT`**, **`GS_MAX_RECENTS`**,
   **`GS_RA_PORT`** — as before.
+- **`GS_TEARDOWN_MS`** (default `400`) — milliseconds to let a just-quit
+  game's GPU/DRM context settle before the carousel contends for the
+  display. Raise it if the carousel ever comes up black or garbled right
+  after a switch.
 - **`GS_DEBUG`** (default `0`) — log switches, screenshot attempts, UI starts
   and Fn taps, with timestamps, to `~/.config/gameswitcher/gameswitcher.log`.
   Turn on when reporting a problem; noisy for everyday use.
@@ -150,7 +154,7 @@ below.
 Run **`gs-doctor.sh`** over SSH (or **Options > Advanced > Game Switcher
 Diagnostics** for a short on-device summary) to see the six RetroArch config
 keys across all four config files, whether the network-command port answers,
-whether `ffmpeg`/`nc`/`python3` are present, the configured Fn code and
+whether `nc`/`python3` are present, the configured Fn code and
 whether its watcher is running, and the tail of the debug log.
 
 ## If EmulationStation still appears to "take over"
@@ -237,12 +241,16 @@ test/run_tests.sh    off-device test suite
 ```
 
 The carousel deliberately links against **core SDL2 only**. dArkOS's
-`cleanup_filesystem.sh` strips the SDL2_image and SDL2_ttf headers from the
-image while `needed_packages.txt` keeps `libsdl2-dev`, so thumbnails are BMPs
-written by `ffmpeg` and text comes from the baked-in font atlas. If no
-compiler is present, or the carousel fails to start even after its retries,
-the installer/shim fall back to the `dialog` menu, which needs nothing beyond
-what every other dArkOS tool already uses.
+`cleanup_filesystem.sh` strips the SDL2_image and SDL2_ttf headers (and
+zlib's) from the image while `needed_packages.txt` keeps `libsdl2-dev`, so
+thumbnails are the PNGs RetroArch itself writes, decoded by a small bundled
+loader (`src/png.h`) that resolves `libz.so.1` at runtime with `dlopen`
+rather than linking zlib at build time, and text comes from the baked-in
+font atlas. A `.bmp` thumbnail left behind by an older install (back when
+`ffmpeg` did that conversion) still loads too. If no compiler is present, or
+the carousel fails to start even after its retries, the installer/shim fall
+back to the `dialog` menu, which needs nothing beyond what every other
+dArkOS tool already uses.
 
 ## Tests
 
@@ -272,9 +280,9 @@ left to check is everything downstream of that plus the two other fixes in
 this round:
 
 1. Reinstall, then tap Fn on a running game — a thumbnail should now appear
-   (was failing at the ffmpeg conversion step; check `gameswitcher.log`
-   with `GS_DEBUG=1` if it still doesn't, which will now show ffmpeg's own
-   error message instead of a bare exit code).
+   (the PNG RetroArch writes is renamed straight into `thumbs/`, no `ffmpeg`
+   conversion step anymore; check `gameswitcher.log` with `GS_DEBUG=1` if it
+   still doesn't).
 2. Press each of A/B/X/Y and confirm the action matches the printed label
    (A=resume, B=back, X=start over, Y=remove) — this was inverted before;
    the fix couldn't be tested off-device, so this is the one to watch most

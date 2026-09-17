@@ -97,9 +97,53 @@ gs_recents_add retroarch /cores/c.so "/roms/snes/Some Game (USA) [!].sfc"
 is "awkward titles survive" "$(head -1 "${GS_RECENTS}" | cut -f6)" "Some Game (USA) [!]"
 
 # ---------------------------------------------------------------------------
+section "timing helpers"
+# ---------------------------------------------------------------------------
+t1=$(gs_now_ms)
+sleep 0.05
+t2=$(gs_now_ms)
+delta=$(( t2 - t1 ))
+if [ "${delta}" -ge 30 ] && [ "${delta}" -le 500 ]; then
+  ok "gs_now_ms measures elapsed time (~50ms slept, saw ${delta}ms)"
+else
+  bad "gs_now_ms measures elapsed time" "~50ms slept, saw ${delta}ms"
+fi
+
+# gs_ra_cmd must not shell out to `nc` when bash's own /dev/udp works --
+# that's the whole point of the fix (nc -u -w1 blocks a full second against
+# a real listener; see CLAUDE.md). Stub nc on PATH to prove it's never
+# invoked on this bash.
+NCSTUB="${WORK}/ncstub"
+mkdir -p "${NCSTUB}"
+printf '#!/bin/bash\n: > "%s/nc-was-called"\n' "${WORK}" > "${NCSTUB}/nc"
+chmod +x "${NCSTUB}/nc"
+rm -f "${WORK}/nc-was-called"
+GS_RA_PORT=55355 PATH="${NCSTUB}:${PATH}" gs_ra_cmd VERSION
+is "gs_ra_cmd uses /dev/udp, not nc, when /dev/udp is available" \
+   "$([ -e "${WORK}/nc-was-called" ] && echo called || echo not-called)" "not-called"
+
+# gs_wait_for_teardown must return in roughly GS_TEARDOWN_MS, not the old
+# fixed 2s (which it could never actually finish early, from inside the
+# shim -- see CLAUDE.md).
+t1=$(gs_now_ms)
+GS_TEARDOWN_MS=100 gs_wait_for_teardown
+t2=$(gs_now_ms)
+delta=$(( t2 - t1 ))
+if [ "${delta}" -ge 90 ] && [ "${delta}" -le 600 ]; then
+  ok "gs_wait_for_teardown honors GS_TEARDOWN_MS (~100ms asked, saw ${delta}ms)"
+else
+  bad "gs_wait_for_teardown honors GS_TEARDOWN_MS" "~100ms asked, saw ${delta}ms"
+fi
+
+# ---------------------------------------------------------------------------
 section "hotkey tap detection"
 # ---------------------------------------------------------------------------
 "${HERE}/hotkey_case.sh" "${ROOT}" && ok "hotkey scenarios" || bad "hotkey scenarios"
+
+# ---------------------------------------------------------------------------
+section "PNG decoder"
+# ---------------------------------------------------------------------------
+"${HERE}/png_case.sh" "${ROOT}" && ok "png scenarios" || bad "png scenarios"
 
 # ---------------------------------------------------------------------------
 section "shim switch loop"
